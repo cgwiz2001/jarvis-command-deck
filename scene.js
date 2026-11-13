@@ -7,6 +7,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { makeAvatar, animateAvatar } from "./avatars.js";
 
 const NOISE = /* glsl */`
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
@@ -237,11 +238,11 @@ export class Deck {
   buildCore() {
     const g = this.core = new THREE.Group(); this.scene.add(g);
     const seg = this.tier.sphereSeg;
-    this.coreMat = new THREE.ShaderMaterial({ transparent: true, uniforms: { uTime: { value: 0 }, uEnergy: { value: 1 }, uFlare: { value: 0 } },
-      vertexShader: NOISE + `uniform float uTime; uniform float uEnergy; uniform float uFlare; varying vec3 vN; varying vec3 vV; varying vec3 vP; varying float vD;
-        void main(){ vec3 p=position; float n=snoise(p*1.15+vec3(0.,uTime*.35,uTime*.2)); vD=n; p+=normal*n*(.07+.06*uFlare)*uEnergy;
+    this.coreMat = new THREE.ShaderMaterial({ transparent: true, uniforms: { uTime: { value: 0 }, uEnergy: { value: 1 }, uFlare: { value: 0 }, uMood: { value: 0 }, uAmp: { value: 0 }, uMoodCol: { value: new THREE.Color(0xff3b5c) } },
+      vertexShader: NOISE + `uniform float uTime; uniform float uEnergy; uniform float uFlare; uniform float uMood; uniform float uAmp; varying vec3 vN; varying vec3 vV; varying vec3 vP; varying float vD;
+        void main(){ vec3 p=position; float n=snoise(p*1.15+vec3(0.,uTime*.35,uTime*.2)); vD=n; p+=normal*n*(.07+.06*uFlare)*uEnergy; p+=normal*uMood*(.04+uAmp*.22)*sin(length(position.xz)*5.5+position.y*4.-uTime*9.);
           vP=position; vec4 mv=modelViewMatrix*vec4(p,1.); vV=-mv.xyz; vN=normalize(normalMatrix*normal); gl_Position=projectionMatrix*mv; }`,
-      fragmentShader: NOISE + `uniform float uTime; uniform float uFlare; varying vec3 vN; varying vec3 vV; varying vec3 vP; varying float vD;
+      fragmentShader: NOISE + `uniform float uTime; uniform float uFlare; uniform float uMood; uniform float uAmp; uniform vec3 uMoodCol; varying vec3 vN; varying vec3 vV; varying vec3 vP; varying float vD;
         void main(){ float fr=pow(1.-max(dot(normalize(vN),normalize(vV)),0.),2.4);
           vec3 q=vP*1.7; float e=snoise(q+vec3(uTime*.25,-uTime*.18,uTime*.1)); float e2=snoise(q*2.3-vec3(0.,uTime*.4,0.));
           float veins=smoothstep(.06,0.,abs(e))*.8+smoothstep(.035,0.,abs(e2))*.4;
@@ -250,7 +251,10 @@ export class Deck {
           vec3 lav=vec3(.72,.55,1.);
           vec3 c=mix(deep,mid,.5+.5*e)*.6 + mix(lav,hot,uFlare*.6)*veins*(.42+uFlare*.8) + vec3(.5,.35,1.)*bands*.7;
           c+=vec3(.55,.42,1.)*fr*1.5 + vec3(.35,.5,1.)*pow(fr,5.)*1.6;
-          float a=clamp(.42+fr*.7+veins*.25,0.,1.);
+          float waves=pow(.5+.5*sin(length(vP.xz)*5.5+vP.y*4.-uTime*9.),5.);
+          vec3 mc=uMoodCol*(.35+veins*1.1+fr*1.6+waves*(.35+uAmp*1.4));
+          c=mix(c,c*.3+mc,uMood*.8);
+          float a=clamp(.42+fr*.7+veins*.25+uMood*waves*.2,0.,1.);
           gl_FragColor=vec4(c*(1.+uFlare*.9),a); }` });
     this.coreMesh = new THREE.Mesh(new THREE.SphereGeometry(1.55, seg, seg / 2), this.coreMat); g.add(this.coreMesh);
     const inner = new THREE.Mesh(new THREE.IcosahedronGeometry(.78, 1), new THREE.MeshBasicMaterial({ color: 0xf5f3ff, wireframe: true, transparent: true, opacity: .55, toneMapped: false }));
@@ -302,19 +306,16 @@ export class Deck {
     this.orbitPlane = new THREE.Group(); this.orbitPlane.rotation.set(.06, 0, -.05); this.orbitPlane.add(this.orbitLine); this.scene.add(this.orbitPlane);
     crew.forEach((bot, k) => {
       const col = new THREE.Color(bot.color), grp = new THREE.Group();
-      const mat = new THREE.MeshStandardMaterial({ color: col.clone().multiplyScalar(.25), emissive: col, emissiveIntensity: .6, metalness: .75, roughness: .22, flatShading: true });
-      const geo = makeGeo(bot.shape); const mesh = new THREE.Mesh(geo, mat); grp.add(mesh);
-      const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 20), new THREE.LineBasicMaterial({ color: col.clone().lerp(new THREE.Color(1, 1, 1), .35), transparent: true, opacity: .9, toneMapped: false }));
-      wire.scale.setScalar(1.06); mesh.add(wire);
+      const av = makeAvatar(bot, { quality: this.tierName, glowTex: this.glowTex }); grp.add(av.head); grp.add(av.badge); const mesh = av.head, mat = av.mat, wire = null;
       const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: col, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false }));
-      halo.scale.setScalar(3.6); grp.add(halo);
+      halo.scale.setScalar(3.6); halo.position.z = -.35; grp.add(halo);
       const ring = new THREE.Mesh(new THREE.PlaneGeometry(2.5, 2.5), this.shockMat()); ring.material.color = col.clone(); ring.material.opacity = .5; ring.rotation.x = -Math.PI / 2; ring.position.y = -.95; grp.add(ring);
-      const sel = new THREE.Mesh(new THREE.TorusGeometry(1.25, .02, 8, 96), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false }));
+      const sel = new THREE.Mesh(new THREE.TorusGeometry(1.45, .018, 8, 96), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false }));
       grp.add(sel);
       const stem = new THREE.Mesh(new THREE.CylinderGeometry(.006, .006, 1.6, 4), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: .35, blending: THREE.AdditiveBlending, depthWrite: false })); stem.position.y = -1.75; grp.add(stem);
       const hit = new THREE.Mesh(new THREE.SphereGeometry(1.35, 10, 10), new THREE.MeshBasicMaterial({ visible: false })); hit.userData.idx = k + 1; grp.add(hit); this.hits.push(hit);
       grp.scale.setScalar(.001); this.orbitPlane.add(grp);
-      const node = { bot, grp, mesh, wire, halo, ring, sel, mat, col, base: k / N * Math.PI * 2, bob: Math.random() * 6, state: "unknown", glow: .3, flare: 0, hoverK: 0, selK: 0, appear: 0, label: this.makeLabel(bot, false), world: new THREE.Vector3(), spin: (Math.random() * .5 + .35) * (k % 2 ? 1 : -1) };
+      const node = { bot, grp, av, mesh, wire, halo, ring, sel, mat, col, base: k / N * Math.PI * 2, bob: Math.random() * 6, state: "unknown", glow: .3, flare: 0, hoverK: 0, selK: 0, appear: 0, label: this.makeLabel(bot, false), world: new THREE.Vector3(), spin: (Math.random() * .5 + .35) * (k % 2 ? 1 : -1) };
       this.nodes.push(node);
     });
   }
@@ -418,6 +419,8 @@ export class Deck {
   disposeBeam(m) { for (const o of [m.outer, m.inner, m.packet]) { this.scene.remove(o); o.material.dispose(); } }
   flareCore(k = 1) { this.coreFlare = Math.min(1.6, (this.coreFlare || 0) + k); this.floorMat.uniforms.uPulseT.value = this.time; this.shock(new THREE.Vector3(0, -1.9, 0), "#c084fc", 7); }
   shock(pos, color, size) { const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.shockMat()); m.material.color = new THREE.Color(color); m.rotation.x = -Math.PI / 2; m.position.copy(pos); this.scene.add(m); this.flares.push({ m, t0: performance.now(), size }); }
+  setMood(kind) { this.moodKind = kind || null; const col = { listening: 0xff3b5c, speaking: 0x22d3ee, thinking: 0xa855f7 }[kind]; if (col != null) this.coreMat.uniforms.uMoodCol.value.set(col); }
+  setLevel(x) { this.levelIn = Math.max(0, Math.min(1, x || 0)); }
   intake() { this.flareCore(1); } // local acknowledgement when a message is queued
   intro() {
     const t0 = performance.now(), from = this.camera.position.clone();
@@ -468,11 +471,17 @@ export class Deck {
     this.coreFlare = Math.max(0, (this.coreFlare || 0) - ds * .9); const cf = this.coreFlare;
     const cStateK = { working: 1.25, waiting: 1.05, idle: .9, unknown: .8 }[this.coreState || "unknown"];
     this.coreMat.uniforms.uTime.value = t * mo; this.coreMat.uniforms.uFlare.value = cf; this.coreMat.uniforms.uEnergy.value = cStateK;
-    const pulse = 1 + Math.sin(t * 1.6) * .025 + cf * .08; this.coreMesh.scale.setScalar(pulse);
+    const mk = this.moodKind ? (this.moodKind === "thinking" ? .55 : 1) : 0; this.moodK = (this.moodK || 0) + (mk - (this.moodK || 0)) * Math.min(1, ds * 4);
+    const lvT = this.moodKind === "thinking" ? .25 + .2 * Math.sin(t * 6) : (this.levelIn || 0); this.amp = (this.amp || 0) + (lvT - (this.amp || 0)) * Math.min(1, ds * (lvT > (this.amp || 0) ? 18 : 5)); this.levelIn = (this.levelIn || 0) * Math.pow(.02, ds);
+    const cu = this.coreMat.uniforms; cu.uMood.value = this.moodK; cu.uAmp.value = this.amp;
+    if (!this._hb) { this._hb = new THREE.Color(0x8b5cf6); this._lb = new THREE.Color(0xa78bfa); }
+    this.coreHalo.material.color.copy(this._hb).lerp(cu.uMoodCol.value, this.moodK * .85); this.coreLight.color.copy(this._lb).lerp(cu.uMoodCol.value, this.moodK * .8);
+    if (this.moodK > .5 && this.amp > .45 && now - (this._lastPulse || 0) > 650) { this._lastPulse = now; this.floorMat.uniforms.uPulseT.value = t; }
+    const pulse = 1 + Math.sin(t * 1.6) * .025 + cf * .08 + this.amp * this.moodK * .09; this.coreMesh.scale.setScalar(pulse);
     this.coreInner.rotation.set(t * .5 * mo, t * .7 * mo, 0); this.cage.rotation.set(-t * .08 * mo, t * .12 * mo, 0);
-    this.coreHalo.material.opacity = .32 + .06 * Math.sin(t * 1.6) + cf * .3; this.coreHalo.scale.setScalar(9.5 + cf * 3 + (this.hover === 0 ? 1 : 0));
+    this.coreHalo.material.opacity = .32 + .06 * Math.sin(t * 1.6) + cf * .3 + (this.moodK || 0) * (.12 + (this.amp || 0) * .3); this.coreHalo.scale.setScalar(9.5 + cf * 3 + (this.hover === 0 ? 1 : 0));
     this.coreLight.intensity = 40 + 14 * Math.sin(t * 1.6) + cf * 100;
-    this.gyro.forEach(g => { const s = g.userData.spd; g.rotation.x += s[0] * ds * mo; g.rotation.y += s[1] * ds * mo; g.rotation.z += s[2] * ds * mo; });
+    const gk = 1 + (this.moodK || 0) * (1.5 + (this.amp || 0) * 4); this.gyro.forEach(g => { const s = g.userData.spd.map(v => v * gk); g.rotation.x += s[0] * ds * mo; g.rotation.y += s[1] * ds * mo; g.rotation.z += s[2] * ds * mo; });
     this.ticks.rotation.y = -t * .06 * mo; this.motes.rotation.y = t * .18 * mo;
     // nodes
     const tmp = new THREE.Vector3();
@@ -480,19 +489,18 @@ export class Deck {
       const delay = .9 + k * .09, ap = Math.min(1, Math.max(0, (t - delay) / .9)); n.appear = ap;
       const ang = n.base + t * .018 * mo; const y = Math.sin(t * .7 + n.bob) * .28 + Math.sin(k * 2.1) * .5;
       n.grp.position.set(Math.cos(ang) * this.orbitR, y + 1.0, Math.sin(ang) * this.orbitR);
-      n.mesh.rotation.y += n.spin * ds * mo; n.mesh.rotation.x += n.spin * .4 * ds * mo;
       const st = n.state, sp = { working: 4.2, waiting: 1.8, idle: .8, unknown: .5 }[st], amp = { working: .35, waiting: .22, idle: .06, unknown: .03 }[st], base = { working: .72, waiting: .55, idle: .32, unknown: .2 }[st];
       const tg = base + Math.sin(t * sp + k) * amp; n.glow += (tg - n.glow) * Math.min(1, ds * 4);
       n.flare = Math.max(0, n.flare - ds * .8);
       n.hoverK += ((this.hover === k + 1 ? 1 : 0) - n.hoverK) * Math.min(1, ds * 8); n.selK += ((this.selected === k + 1 ? 1 : 0) - n.selK) * Math.min(1, ds * 5);
       const sc = ease.outBack(ap) * (1 + n.hoverK * .18 + n.selK * .12 + n.flare * .3); n.grp.scale.setScalar(Math.max(.001, sc));
-      n.mat.emissiveIntensity = n.glow * (1 + n.flare * 2.5) + n.hoverK * .5;
+      animateAvatar(n.av, n, t, ds, now, this.camera, n.glow); n.av.badge.position.y = n.av.top + .78 + Math.sin(t * 1.3 + k) * .05; n.av.badge.material.opacity = (.55 + n.glow * .35 + n.hoverK * .3) * ap;
       n.halo.material.opacity = (.1 + n.glow * .22 + n.flare * .5 + n.hoverK * .18) * ap; n.halo.scale.setScalar(3 + n.glow * .9 + n.flare * 2.2);
       n.ring.rotation.z += ds * (st === "working" ? 1.6 : st === "waiting" ? -.6 : .15) * mo;
       n.ring.material.color.set(st === "waiting" ? "#fbbf24" : n.bot.color); n.ring.material.opacity = ({ working: .9, waiting: .75, idle: .3, unknown: .15 }[st] + n.flare * .5) * ap;
-      n.sel.material.opacity = n.selK * .9; n.sel.rotation.set(t * .9, t * .6, 0); n.sel.scale.setScalar(1 + Math.sin(t * 3) * .03);
+      n.sel.material.opacity = n.selK * .9; n.sel.rotation.set(Math.PI / 2 + Math.sin(t * .9) * .12, Math.cos(t * .7) * .12, t * .5); n.sel.position.y = -.2; n.sel.scale.setScalar(1 + Math.sin(t * 3) * .03);
       n.grp.getWorldPosition(n.world);
-      tmp.copy(n.world); tmp.y += 1.35; this.place(n.label, tmp, ap);
+      tmp.copy(n.world); tmp.y += n.av.top + 1.2; this.place(n.label, tmp, ap);
     });
     this.place(this.coreLabel, tmp.set(0, 2.55, 0), Math.min(1, t / 1.2));
     // hover raycast (desktop)

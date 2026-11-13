@@ -14,7 +14,7 @@ function conn() {
   let own = {}; try { own = JSON.parse(LS.get("jcd.conn") || "{}") || {}; } catch {}
   const h = hudCfg();
   const pick = (a, b) => (a && String(a).trim()) || (b && String(b).trim()) || "";
-  return { base: pick(own.base, h.sbBase).replace(/\/+$/, ""), set: pick(own.set, h.sbSet), inbox: pick(own.inbox, h.sbInbox), status: pick(own.status, h.sbStatus),
+  return { base: pick(own.base, h.sbBase).replace(/\/+$/, ""), set: pick(own.set, h.sbSet), inbox: pick(own.inbox, h.sbInbox), status: pick(own.status, h.sbStatus), hist: pick(own.hist, h.sbHist), style: pick(own.style, h.sbStyle),
     fromHud: !own.base && !!h.sbBase };
 }
 function token() { return LS.get("jcd.tok") || LS.get("jarvis.sbtok") || ""; }
@@ -29,11 +29,11 @@ async function sbGet(id) {
 }
 function sbJson(md) { const m = /```json\s*([\s\S]*?)```/.exec(md || ""); return JSON.parse(m ? m[1] : md); }
 function sbMd(md, obj) { const j = "```json\n" + JSON.stringify(obj, null, 2) + "\n```"; return /```json[\s\S]*?```/.test(md) ? md.replace(/```json[\s\S]*?```/, () => j) : md + "\n\n" + j + "\n"; }
-async function sbAppend(text) {
+async function sbAppend(text, routedTo = null) {
   const t = token(), c = conn(); if (!t) throw new Error("no token");
   for (let i = 0; i < 4; i++) {
     const { n, etag } = await sbGet(c.inbox); if (!etag) throw new Error("no ETag from Second Brain"); const o = sbJson(n.markdown); o.requests = Array.isArray(o.requests) ? o.requests : [];
-    const item = { id: "r" + Date.now().toString(36), createdAt: new Date().toISOString(), text, status: "new", routedTo: null, reply: null, repliedAt: null };
+    const item = { id: "r" + Date.now().toString(36), createdAt: new Date().toISOString(), text, status: "new", routedTo, reply: null, repliedAt: null };
     o.requests.push(item);
     const r = await fetch(noteUrl(c.inbox), { method: "PATCH", headers: { Authorization: "Bearer " + t, "Content-Type": "application/json", "If-Match": etag, "X-Second-Brain-Agent": WRITE_AGENT },
       body: JSON.stringify({ title: n.title, summary: n.summary || "", markdown: sbMd(n.markdown, o) }) });
@@ -162,55 +162,31 @@ function renderDossier() {
   panel.classList.add("open");
   $("briefBtn").onclick = () => { const inp = $("cmdIn"); inp.value = i === 0 ? "" : `For ${b.name}: `; inp.focus(); if (mobileQ.matches) closeLeft(); };
 }
-function renderAll() { renderLink(); renderFeed(); renderCrew(); renderRouter(); renderDossier(); shift(); }
+function renderAll() { renderLink(); renderFeed(); renderCrew(); renderRouter(); renderDossier(); shift(); if (typeof renderNote === "function" && !D.mode) renderNote(); }
 
 // ---------- selection & panels ----------
 function select(i) { S.selected = i; if (deck) deck.select(i, true); if (i != null && mobileQ.matches) closeLeft(); renderCrew(); renderDossier(); shift(); }
 function shift() { if (!deck) return; const L = $("left").classList.contains("open"), R = $("right").classList.contains("open"); deck.setShift(mobileQ.matches ? 0 : (L ? 130 : 0) - (R ? 130 : 0)); }
-function openLeft(tab) { $("left").classList.add("open"); setTab(tab || "feed"); setTimeout(shift); $("feedBtn").classList.toggle("on", tab !== "crew"); $("crewBtn").classList.toggle("on", tab === "crew"); if (mobileQ.matches && S.selected != null) select(null); }
-function closeLeft() { setTimeout(shift); $("left").classList.remove("open"); $("feedBtn").classList.remove("on"); $("crewBtn").classList.remove("on"); }
-function setTab(t) { document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); $("tab-feed").hidden = t !== "feed"; $("tab-crew").hidden = t !== "crew"; }
+function openLeft(tab) { $("left").classList.add("open"); document.body.classList.add("leftopen"); setTab(tab || "talk"); setTimeout(shift); if (mobileQ.matches && S.selected != null) select(null); renderCaption(); }
+function closeLeft() { setTimeout(shift); $("left").classList.remove("open"); document.body.classList.remove("leftopen"); for (const k in TABS) $(TABS[k]).classList.remove("on"); renderCaption(); }
+const TABS = { talk: "talkTabBtn", feed: "feedBtn", crew: "crewBtn" };
+function setTab(t) { document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); for (const k in TABS) { $("tab-" + k).hidden = t !== k; $(TABS[k]).classList.toggle("on", $("left").classList.contains("open") && t === k); } if (t === "talk") scrollDialog(); }
 document.addEventListener("click", e => {
   const s = e.target.closest("[data-sel]"); if (s) { select(+s.dataset.sel); return; }
   const o = e.target.closest("[data-open]"); if (o) openSettings();
 });
-document.querySelectorAll(".tab").forEach(b => b.onclick = () => { setTab(b.dataset.tab); $("feedBtn").classList.toggle("on", b.dataset.tab === "feed"); $("crewBtn").classList.toggle("on", b.dataset.tab === "crew"); });
+document.querySelectorAll(".tab").forEach(b => b.onclick = () => setTab(b.dataset.tab));
 const toggleLeft = tab => { const L = $("left"); if (L.classList.contains("open") && !$("tab-" + tab).hidden) closeLeft(); else openLeft(tab); };
-$("feedBtn").onclick = () => toggleLeft("feed"); $("crewBtn").onclick = () => toggleLeft("crew");
+$("feedBtn").onclick = () => toggleLeft("feed"); $("crewBtn").onclick = () => toggleLeft("crew"); $("talkTabBtn").onclick = () => toggleLeft("talk");
 $("leftClose").onclick = closeLeft; $("dossClose").onclick = () => select(null);
 $("linkPill").onclick = () => token() ? poll() : openSettings();
 
-// ---------- command bar ----------
 S.justSent = new Set();
-$("cmd").addEventListener("submit", async e => {
-  e.preventDefault(); const inp = $("cmdIn"), v = inp.value.trim(); if (!v) return;
-  if (!token()) { toast("Link Second Brain in <b>Settings</b> first, Commander."); openSettings(); return; }
-  $("sendBtn").disabled = true; deck && deck.intake();
-  try { const item = await sbAppend(v); S.justSent.add(item.id); seen[item.id] = "new"; LS.set("jcd.seen", JSON.stringify(seen)); inp.value = "";
-    const n = nextRouter(); toast(`Queued for Jarvis.${n ? ` Next router pass <b>${esc(n.label)}</b>` : ""}, or straight away if you talk to Jarvis directly.`, 6000);
-    await poll(); if (!mobileQ.matches) openLeft("feed");
-  } catch (err) { toast("Couldn't reach Jarvis's inbox: " + esc(err.message), 6000); }
-  $("sendBtn").disabled = false;
-});
-// real speech-to-text where the browser supports it (Chrome / Android Chrome)
-(() => {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) return;
-  const btn = $("micBtn"); btn.hidden = false; let rec = null, base = "";
-  btn.onclick = () => {
-    if (rec) { rec.stop(); return; }
-    rec = new SR(); rec.lang = "en-GB"; rec.interimResults = true; rec.continuous = false; base = $("cmdIn").value ? $("cmdIn").value.trim() + " " : "";
-    rec.onresult = ev => { let s = ""; for (const r of ev.results) s += r[0].transcript; $("cmdIn").value = base + s; };
-    rec.onerror = ev => { if (ev.error !== "aborted" && ev.error !== "no-speech") toast("Mic: " + esc(ev.error)); };
-    rec.onend = () => { btn.classList.remove("rec"); rec = null; $("cmdIn").focus(); };
-    try { rec.start(); btn.classList.add("rec"); } catch (e) { rec = null; toast("Mic unavailable: " + esc(e.message)); }
-  };
-})();
-
 // ---------- settings ----------
 function openSettings() {
   const c = conn(), src = tokenSource();
   $("tokState").textContent = src === "deck" ? "A token is saved on this device (hidden)." : src === "hud" ? "Using the Jarvis HUD's token on this device (hidden). Save one here to override." : "No token saved. Paste your Second Brain token to link the deck.";
-  $("tokIn").value = ""; $("cBase").value = c.base; $("cSet").value = c.set; $("cInbox").value = c.inbox; $("cStatus").value = c.status;
+  $("tokIn").value = ""; $("cBase").value = c.base; $("cSet").value = c.set; $("cInbox").value = c.inbox; $("cStatus").value = c.status; $("cHist").value = c.hist; $("cStyle").value = c.style; settingsVoice();
   $("connState").textContent = c.fromHud ? "Filled in from the Jarvis HUD on this device." : (c.base ? "Saved on this device." : "Enter the API base, context set and the two note ids.");
   $("connDet").open = !c.base; $("qSel").value = LS.get("jcd.quality") || "auto"; $("motionChk").checked = LS.get("jcd.reduced") === "1";
   $("verTag").textContent = "Command Deck v" + VERSION + (deck ? " · render tier " + deck.tierName : "");
@@ -220,12 +196,282 @@ $("setBtn").onclick = openSettings; $("setClose").onclick = () => $("settings").
 $("settings").addEventListener("click", e => { if (e.target.id === "settings") $("settings").hidden = true; });
 $("tokSave").onclick = () => { const v = $("tokIn").value.trim(); if (!v) return; LS.set("jcd.tok", v); $("tokIn").value = ""; $("tokState").textContent = "Token saved on this device (hidden)."; S.err = null; poll(); };
 $("tokForget").onclick = () => { LS.del("jcd.tok"); $("tokState").textContent = tokenSource() === "hud" ? "Deck token forgotten. The HUD's token on this device is still used." : "Token forgotten."; S.inbox = []; S.bots = []; S.at = 0; ingest(); renderAll(); if (token()) poll(); };
-$("connSave").onclick = () => { const o = { base: $("cBase").value.trim(), set: $("cSet").value.trim(), inbox: $("cInbox").value.trim(), status: $("cStatus").value.trim() };
+$("connSave").onclick = () => { const o = { base: $("cBase").value.trim(), set: $("cSet").value.trim(), inbox: $("cInbox").value.trim(), status: $("cStatus").value.trim(), hist: $("cHist").value.trim(), style: $("cStyle").value.trim() }; D.style = null;
   if (o.base && !okBase(o.base)) { $("connState").textContent = "API base must be an https:// URL."; return; } LS.set("jcd.conn", JSON.stringify(o)); $("connState").textContent = "Saved on this device."; poll(); };
 $("connTest").onclick = async () => { $("connState").textContent = "Testing…"; try { const c = conn(); await sbGet(c.status); await sbGet(c.inbox); $("connState").textContent = "Link OK: both notes readable."; } catch (e) { $("connState").textContent = "Link failed: " + e.message; } };
 $("qSel").onchange = e => { LS.set("jcd.quality", e.target.value); toast("Reloading with new visual quality…", 1500); setTimeout(() => location.reload(), 700); };
 $("motionChk").onchange = e => { LS.set("jcd.reduced", e.target.checked ? "1" : "0"); setTimeout(() => location.reload(), 300); };
 document.addEventListener("keydown", e => { if (e.key === "Escape") { if (!$("settings").hidden) $("settings").hidden = true; else if (S.selected != null) select(null); else closeLeft(); } if (e.key === "/" && document.activeElement !== $("cmdIn") && $("settings").hidden) { e.preventDefault(); $("cmdIn").focus(); } });
+
+// ---------- v2: live conversational voice loop ----------
+// Instant replies use xAI with the key the Jarvis HUD already stores on this origin ("jarvis.key").
+const XAI_URL = "https://api.x.ai/v1/responses";
+const DEFAULT_MODEL = "grok-4.20-0309-non-reasoning";
+const xkey = () => LS.get("jarvis.key") || "";
+const xmodel = () => LS.get("jcd.model") || LS.get("jarvis.chatmodel8") || DEFAULT_MODEL;
+const pref = (k, d) => { const v = LS.get("jcd." + k); return v == null ? d : v === "1"; };
+const keyish = x => /xai-[A-Za-z0-9]{10,}|Bearer\s+\S{10,}|AIza[0-9A-Za-z_\-]{20,}|gh[opsu]_[A-Za-z0-9]{20,}/.test(x);
+const rid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const isAndroid = /Android/i.test(navigator.userAgent);
+const DEV = LS.get("jcd.dev") || (() => { const d = (mobileQ.matches ? "Phone-" : "Desktop-") + Math.random().toString(36).slice(2, 6); LS.set("jcd.dev", d); return d; })();
+const D = { log: [], hist: [], mode: null, talk: false, interim: "", style: null, styleAt: 0, thinking: false, quietMisses: 0 };
+try { D.log = JSON.parse(LS.get("jcd.dialog") || "[]") || []; } catch {}
+function saveLog() { D.log = D.log.slice(-60); LS.set("jcd.dialog", JSON.stringify(D.log)); }
+function addMsg(who, text, extra) { const m = Object.assign({ id: rid(), who, text: String(text || ""), at: new Date().toISOString() }, extra || {}); D.log.push(m); saveLog(); renderDialog(); return m; }
+
+// ----- dialogue rendering -----
+function bubble(m) {
+  if (m.who === "sys") return `<div class="bub sys">${esc(m.text)}</div>`;
+  const me = m.who === "me", rt = m.route && m.route.i > 0 ? `<div class="rt">→ ${chip(m.route.i)} <span>${m.route.ok ? "queued in inbox" : "not queued"}</span></div>` : "";
+  return `<div class="bub ${me ? "me" : "jv"}"><span class="who">${me ? "Commander" : "Jarvis"}</span>${esc(m.text)}${rt}</div>`;
+}
+const liveBubbles = () => (D.interim ? `<div class="bub me interim"><span class="who">Commander · live</span>${esc(D.interim)}</div>` : "") +
+  (D.thinking ? `<div class="bub jv thinking"><span class="who">Jarvis</span><span class="dots"><i></i><i></i><i></i></span></div>` : "");
+function scrollDialog() { const b = $("tab-talk"); if (b) b.scrollTop = b.scrollHeight; }
+function renderDialog() {
+  const el = $("dialog"); if (!el) return;
+  const items = D.log.slice(-40);
+  el.innerHTML = (items.length || D.interim || D.thinking) ? items.map(bubble).join("") + liveBubbles()
+    : `<div class="empty"><b>VOICE LINK READY</b>${SRc ? "Tap the mic to speak, hold it (or press TALK) for a hands-free conversation." : "Type below to talk to Jarvis. (Voice input isn't supported in this browser.)"}${xkey() ? "" : `<div style="margin-top:10px">Instant replies need an xAI key. <button class="btn" data-open="settings" style="margin-top:10px">Add key in Settings</button></div>`}</div>`;
+  scrollDialog(); renderCaption();
+}
+let capTimer = null;
+function renderCaption() {
+  const el = $("caption"); if (!el) return; clearTimeout(capTimer);
+  if ($("left").classList.contains("open")) { el.innerHTML = ""; return; }
+  const last = D.log.slice(-2).filter(m => m.who !== "sys"), fresh = last.length && Date.now() - new Date(last[last.length - 1].at) < 14000;
+  let html = "";
+  if (D.mode || D.interim || D.thinking || fresh) {
+    const tail = D.interim || D.thinking ? last.slice(-1).filter(m => m.who === "jv") : last;
+    html = tail.map(bubble).join("") + liveBubbles();
+  }
+  el.innerHTML = html; if (html && !D.mode) capTimer = setTimeout(renderCaption, 14500);
+}
+
+// ----- mood (core reacts) -----
+function renderNote() {
+  const n = $("cmdNote"); n.classList.remove("mood");
+  const lbl = { listening: "● Listening…", thinking: "◆ Jarvis is thinking…", speaking: "◉ Jarvis is speaking · tap mic to interrupt" }[D.mode];
+  if (lbl) { n.classList.add("mood"); n.textContent = lbl + (D.talk ? "  ·  Talk mode on" : ""); return; }
+  const r = nextRouter(), rt = r ? ` (next ${esc(r.label)})` : "";
+  n.innerHTML = xkey() ? `Jarvis replies instantly.<span class="long"> Jobs for the crew go to Jarvis's inbox; the router hands them on 4× each weekday${rt}, or straight away when you chat to Jarvis directly.</span><span class="short"> Crew jobs: router 4× weekdays${rt}, or direct chat.</span>`
+    : `<b>No xAI key</b>: messages go to Jarvis's inbox (router 4× each weekday${rt}). <a href="#" data-open="settings" style="color:#c4b5fd">Add a key</a> for instant replies.`;
+}
+function setMode(m) {
+  D.mode = m || null; ["listening", "thinking", "speaking"].forEach(k => document.body.classList.toggle("m-" + k, D.mode === k));
+  if (deck) deck.setMood(D.mode); renderNote(); renderCaption();
+}
+
+// ----- persona: Jarvis Voice & Style note (if its id is set), cached 10 min -----
+async function loadStyle() {
+  const c = conn(); if (!c.style || !token()) return null;
+  if (D.style && Date.now() - D.styleAt < 600000) return D.style;
+  try { const { n } = await sbGet(c.style); D.style = String(n.markdown || "").slice(0, 5000); D.styleAt = Date.now(); } catch { }
+  return D.style;
+}
+function crewBrief() {
+  return ROSTER.slice(1).map((b, k) => { const s = S.botByIdx[k + 1]; return `- ${b.name}: ${b.title}${s ? ` · ${stateLabel(stateOf(s.state))}: ${String(s.note || "").slice(0, 90)}` : ""}`; }).join("\n");
+}
+async function systemPrompt() {
+  const style = await loadStyle();
+  const now = new Date().toLocaleString("en-GB", { timeZone: TZ, weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+  return (style ? "Your own Voice & Style notes (follow them):\n" + style + "\n\n" : "You are Jarvis, the user's chief of staff: calm, British, short and precise, with a little dry humour.\n\n") +
+`You are speaking through the Jarvis Command Deck, a live voice link. It is a HUD surface, so use the user's name only when it adds something.
+Reply in one to three short spoken sentences: plain natural speech with contractions, no markdown, lists, symbols, emoji or URLs.
+You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, route it: the deck adds it to your Second Brain inbox addressed to that bot. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a routed job is done or started; say you've passed it on or queued it. Do not mention router timing; the deck adds that.
+Crew (name: role · live status snapshot, may be out of date):
+${crewBrief()}
+Current date and time: ${now} (Europe/London).
+Respond with ONLY a JSON object and nothing else:
+{"reply": "<what you say aloud>", "route": {"bot": "<exact crew name>", "task": "<one-line brief for that bot with the needed detail>"} }
+or {"reply": "...", "route": null}`;
+}
+function parseReply(raw) {
+  let t = String(raw || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  const a = t.indexOf("{"), b = t.lastIndexOf("}");
+  if (a >= 0 && b > a) { try { const o = JSON.parse(t.slice(a, b + 1)); let route = null;
+    if (o.route && o.route.bot) { const i = botIndex(o.route.bot); if (i > 0) route = { i, task: String(o.route.task || "").trim() }; }
+    return { reply: String(o.reply || "").trim(), route }; } catch { } }
+  return { reply: t.replace(/[{}"]/g, "").trim(), route: null };
+}
+async function askJarvis(text) {
+  const input = [{ role: "system", content: await systemPrompt() }, ...D.hist.slice(-8), { role: "user", content: text }];
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 25000);
+  try {
+    const r = await fetch(XAI_URL, { method: "POST", signal: ctl.signal, headers: { Authorization: "Bearer " + xkey(), "Content-Type": "application/json" },
+      body: JSON.stringify({ model: xmodel(), input, max_output_tokens: 400, store: false }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((d.error && (d.error.message || d.error)) || ("HTTP " + r.status));
+    const out = d.output_text || (d.output || []).filter(o => o.type === "message").flatMap(o => o.content || []).filter(x => x.type === "output_text").map(x => x.text).join(" ");
+    return parseReply(out);
+  } finally { clearTimeout(to); }
+}
+
+// ----- one exchange: Commander -> Jarvis (-> optional route to a bot) -----
+let convBusy = false;
+async function converse(text, spoken) {
+  text = String(text || "").trim(); if (!text || convBusy) return;
+  if (keyish(text)) { toast("That looks like a key or token, so I haven't sent it anywhere."); return; }
+  convBusy = true; $("sendBtn").disabled = true; addMsg("me", text);
+  const speakIt = spoken || pref("speakTyped", true);
+  try {
+    if (!xkey()) { // fallback: queue for the router, no instant reply
+      let reply;
+      if (!token()) reply = "I can't reply instantly without an xAI key, and Second Brain isn't linked either. Add both in Settings.";
+      else { try { const item = await sbAppend(text); markSent(item); deck && deck.intake(); const n = nextRouter();
+          reply = `No instant replies without an xAI key, so I've added that to my inbox. The router picks it up${n ? " " + n.label : " on its next run"}, or straight away if you chat to me directly.`; poll(); }
+        catch (e) { reply = "I couldn't add that to my inbox just now (" + e.message + ")."; } }
+      addMsg("jv", reply); if (speakIt) speak(reply); else setMode(null); return;
+    }
+    D.thinking = true; setMode("thinking"); renderDialog();
+    let res; try { res = await askJarvis(text); }
+    catch (e) { D.thinking = false; renderDialog(); const msg = e.name === "AbortError" ? "timed out" : e.message;
+      addMsg("sys", "Jarvis couldn't reply (" + msg + ")."); if (speakIt) speak("Sorry, I couldn't reach my reply service just then."); else setMode(null); return; }
+    D.thinking = false;
+    let reply = res.reply || "Understood.", route = null;
+    if (res.route) {
+      const i = res.route.i, name = ROSTER[i].name; deck && deck.fire(i, "out"); route = { i, ok: false };
+      if (!token()) reply += ` Second Brain isn't linked on this device, so ${name} hasn't got it yet.`;
+      else try { const item = await sbAppend(res.route.task || text, name); markSent(item); route.ok = true; route.id = item.id; const n = nextRouter();
+          reply += ` ${name} picks it up on the next router run${n ? ", " + n.label : ""}, or sooner if you chat to me directly.`; poll(); }
+        catch (e) { reply += ` I couldn't add it to my inbox just now, so ${name} hasn't got it yet.`; }
+    }
+    D.hist.push({ role: "user", content: text }, { role: "assistant", content: reply }); D.hist = D.hist.slice(-12);
+    addMsg("jv", reply, route ? { route } : null);
+    logHistory(text, reply);
+    if (speakIt) speak(reply); else setMode(null);
+  } finally { convBusy = false; $("sendBtn").disabled = false; D.thinking = false; }
+}
+function markSent(item) { S.justSent.add(item.id); seen[item.id] = "new"; LS.set("jcd.seen", JSON.stringify(seen)); }
+
+// ----- History note logging (same entry format as the HUD) -----
+const hEsc = x => String(x || "").replace(/\s+/g, " ").trim().replace(/[\\`*_#<>\[\]|~]/g, "\\$&").replace(/^([-+=]|\d+\.)/, "\\$1");
+const hWhen = t => { const p = {}; new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "short" }).formatToParts(new Date(t)).forEach(x => p[x.type] = x.value); return `${p.weekday} ${p.day} ${p.month} ${p.year}, ${p.hour}:${p.minute} ${p.timeZoneName}`; };
+const histQ = [];
+async function logHistory(q, a) {
+  if (!pref("hist", true) || keyish(q + " " + a)) return;
+  histQ.push({ id: "d" + rid(), at: new Date().toISOString(), q, a }); flushHistory();
+}
+let histBusy = false;
+async function flushHistory() {
+  const c = conn(); if (histBusy || !histQ.length || !token() || !c.hist) return; histBusy = true;
+  try {
+    for (let i = 0; i < 4 && histQ.length; i++) {
+      const { n, etag } = await sbGet(c.hist); if (!etag) throw new Error("no ETag");
+      const who = hEsc(hudCfg().name || "You"), entries = histQ.map(e => `## ${hWhen(e.at)} · Command Deck\n<!-- id:${e.id} at:${e.at} dev:${DEV.replace(/[^\w-]/g, "")} -->\n\n**${who}:** ${hEsc(e.q)}\n\n**Jarvis:** ${hEsc(e.a)}\n`).join("\n---\n\n");
+      let md = String(n.markdown || "").replace(/\s+$/, ""); md += (/^## /m.test(md) ? "\n\n---\n\n" : "\n\n") + entries;
+      while (md.length > 190000) { const a = md.search(/^## /m), b = md.indexOf("\n## ", a + 3); if (a < 0 || b < 0) break; md = md.slice(0, a) + md.slice(b + 1); }
+      const r = await fetch(noteUrl(c.hist), { method: "PATCH", headers: { Authorization: "Bearer " + token(), "Content-Type": "application/json", "If-Match": etag, "X-Second-Brain-Agent": WRITE_AGENT },
+        body: JSON.stringify({ title: n.title, summary: n.summary || "", markdown: md }) });
+      if (r.status === 409 || r.status === 412) continue; if (!r.ok) throw new Error("HTTP " + r.status);
+      histQ.length = 0;
+    }
+  } catch (e) { console.warn("history log failed:", e.message); }
+  histBusy = false;
+}
+
+// ----- text-to-speech (browser voices, British male preferred) -----
+const TTS = { gen: 0, timer: null, lastB: 0, safety: null };
+const synth = window.speechSynthesis || null;
+function voices() { try { return synth ? synth.getVoices() : []; } catch { return []; } }
+function pickVoice() {
+  const vs = voices(), want = LS.get("jcd.voice"); if (want) { const v = vs.find(x => x.voiceURI === want || x.name === want); if (v) return v; }
+  const gb = vs.filter(v => /en[-_]GB/i.test(v.lang));
+  return gb.find(v => /\b(male|daniel|george|arthur|oliver|ryan|thomas|harry|james|brian)\b/i.test(v.name)) || gb.find(v => /Google UK English Male/i.test(v.name)) || gb[0] || vs.find(v => /^en/i.test(v.lang)) || null;
+}
+function chunks(t) { const out = []; String(t).replace(/\s+/g, " ").match(/[^.!?]+[.!?]*\s*/g)?.forEach(sn => { sn = sn.trim(); if (!sn) return; while (sn.length > 190) { let k = sn.lastIndexOf(",", 190); if (k < 60) k = sn.lastIndexOf(" ", 190); if (k < 1) k = 190; out.push(sn.slice(0, k + 1)); sn = sn.slice(k + 1).trim(); } if (sn) out.push(sn); }); return out.length ? out : [String(t)]; }
+function speak(text, onDone) {
+  const done = () => { clearInterval(TTS.timer); clearTimeout(TTS.safety); setMode(null); afterSpeak(); onDone && onDone(); };
+  if (!synth || !text) { done(); return; }
+  stopSpeaking(true); const g = ++TTS.gen, parts = chunks(text), v = pickVoice(), rate = +(LS.get("jcd.rate") || 1);
+  setMode("speaking");
+  parts.forEach((p, idx) => { const u = new SpeechSynthesisUtterance(p); if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "en-GB"; u.rate = rate; u.pitch = .95;
+    u.onboundary = () => { TTS.lastB = performance.now(); deck && deck.setLevel(.75 + Math.random() * .25); };
+    u.onend = () => { if (g === TTS.gen && idx === parts.length - 1) done(); };
+    u.onerror = ev => { if (g === TTS.gen && idx === parts.length - 1 && ev.error !== "interrupted" && ev.error !== "canceled") done(); };
+    synth.speak(u); });
+  // amplitude envelope: real word-boundary events where the browser fires them, a speech-like envelope otherwise
+  TTS.timer = setInterval(() => { if (g !== TTS.gen) return; if (performance.now() - TTS.lastB > 260) deck && deck.setLevel(.3 + Math.random() * .45); }, 120);
+  TTS.safety = setTimeout(() => { if (g === TTS.gen && D.mode === "speaking") { synth.cancel(); done(); } }, 4000 + text.length * 110 / rate);
+}
+function stopSpeaking(silent) { TTS.gen++; clearInterval(TTS.timer); clearTimeout(TTS.safety); try { synth && synth.cancel(); } catch { } if (!silent && D.mode === "speaking") setMode(null); }
+function afterSpeak() { if (D.talk && SRc && pref("relisten", true)) setTimeout(() => { if (D.talk && !rec && !D.mode) listen(); }, 380); }
+if (synth) { synth.onvoiceschanged = () => { if (!$("settings").hidden) settingsVoice(); }; voices(); }
+
+// ----- speech recognition (Web Speech API, en-GB) + mic level meter -----
+const SRc = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+let rec = null, meter = null;
+async function startMeter() {
+  if (isAndroid || !navigator.mediaDevices || !window.AudioContext) return; // Android: avoid fighting the recogniser for the mic
+  try { const st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    if (!rec) { st.getTracks().forEach(t => t.stop()); return; }
+    const ac = new AudioContext(), an = ac.createAnalyser(); an.fftSize = 512; ac.createMediaStreamSource(st).connect(an); const buf = new Uint8Array(an.fftSize);
+    meter = { st, ac, raf: 0 }; const tick = () => { an.getByteTimeDomainData(buf); let s = 0; for (const x of buf) { const d = (x - 128) / 128; s += d * d; } deck && deck.setLevel(Math.min(1, Math.sqrt(s / buf.length) * 5.5)); meter.raf = requestAnimationFrame(tick); }; tick();
+  } catch { }
+}
+function stopMeter() { if (!meter) return; cancelAnimationFrame(meter.raf); meter.st.getTracks().forEach(t => t.stop()); meter.ac.close().catch(() => { }); meter = null; }
+function listen() {
+  if (!SRc || rec || convBusy) return; stopSpeaking(true);
+  const r = rec = new SRc(); r.lang = "en-GB"; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
+  let fin = "", err = ""; D.interim = "";
+  r.onstart = () => { setMode("listening"); $("micBtn").classList.add("rec"); startMeter(); };
+  r.onsoundstart = () => deck && deck.setLevel(.4);
+  r.onresult = ev => { let f = "", it = ""; for (let i = 0; i < ev.results.length; i++) { const x = ev.results[i]; if (x.isFinal) f += x[0].transcript; else it += x[0].transcript; } fin = f; D.interim = (f + " " + it).trim(); if (!meter) deck && deck.setLevel(.55 + Math.random() * .35); renderDialog(); };
+  r.onerror = ev => { err = ev.error; if (!["aborted", "no-speech"].includes(ev.error)) toast("Mic: " + esc(ev.error === "not-allowed" ? "microphone permission is blocked" : ev.error)); };
+  r.onend = () => { const txt = (fin || D.interim).trim(); rec = null; $("micBtn").classList.remove("rec"); stopMeter(); D.interim = ""; setMode(null); renderDialog();
+    if (txt) { D.quietMisses = 0; converse(txt, true); return; }
+    if (D.talk && err === "no-speech" && ++D.quietMisses < 3) { setTimeout(() => D.talk && !rec && !D.mode && listen(), 300); return; }
+    if (D.talk && (err === "no-speech" || err === "not-allowed" || err === "audio-capture")) { setTalk(false); addMsg("sys", err === "no-speech" ? "Talk mode paused: I didn't hear anything." : "Talk mode stopped: the microphone isn't available."); }
+  };
+  try { r.start(); } catch (e) { rec = null; toast("Mic unavailable: " + esc(e.message)); }
+}
+function stopListening(abort) { if (!rec) return; try { abort ? rec.abort() : rec.stop(); } catch { } }
+function setTalk(on) {
+  D.talk = !!on; D.quietMisses = 0; const b = $("talkBtn"); b.classList.toggle("on", D.talk); b.setAttribute("aria-pressed", String(D.talk));
+  if (D.talk) { if (mobileQ.matches) closeLeft(); toast("Talk mode on. Speak naturally; tap the mic to interrupt Jarvis.", 3000); if (!D.mode) listen(); }
+  else { stopListening(true); stopSpeaking(); } renderNote();
+}
+(() => {
+  const mic = $("micBtn"), tb = $("talkBtn");
+  if (!SRc) { tb.hidden = true; return; }
+  mic.hidden = false; let t0 = 0, lp = null, long = false;
+  mic.addEventListener("contextmenu", e => e.preventDefault());
+  mic.addEventListener("pointerdown", e => { t0 = Date.now(); long = false; clearTimeout(lp); lp = setTimeout(() => { long = true; if (navigator.vibrate) navigator.vibrate(18); setTalk(!D.talk); }, 550); });
+  const up = () => { clearTimeout(lp); if (long || !t0) { t0 = 0; return; } t0 = 0;
+    if (D.mode === "speaking") { stopSpeaking(); listen(); return; }            // barge-in
+    if (rec) { stopListening(false); return; }
+    listen(); };
+  mic.addEventListener("pointerup", up); mic.addEventListener("pointercancel", () => { clearTimeout(lp); t0 = 0; });
+  mic.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); t0 = Date.now(); up(); } });
+  tb.onclick = () => setTalk(!D.talk);
+})();
+$("cmd").addEventListener("submit", e => { e.preventDefault(); const inp = $("cmdIn"), v = inp.value.trim(); if (!v || convBusy) return; inp.value = ""; if (D.mode === "speaking") stopSpeaking(); converse(v, D.talk); });
+
+// ----- settings: voice & key -----
+function settingsVoice() {
+  $("xkState").textContent = xkey() ? "An xAI key is saved on this device (hidden; shared with the Jarvis HUD on this site)." : "No xAI key yet. Without one, messages are queued in Jarvis's inbox instead of answered instantly.";
+  $("xkIn").value = ""; $("xModel").value = xmodel();
+  const sel = $("vSel"), vs = voices(), cur = LS.get("jcd.voice") || "";
+  const gb = vs.filter(v => /en[-_]GB/i.test(v.lang)), other = vs.filter(v => !/en[-_]GB/i.test(v.lang) && /^en/i.test(v.lang));
+  const auto = pickVoice();
+  sel.innerHTML = `<option value="">Auto · British male if available${auto ? " (" + esc(auto.name) + ")" : ""}</option>` +
+    (gb.length ? `<optgroup label="British English">${gb.map(v => `<option value="${esc(v.voiceURI)}">${esc(v.name)}</option>`).join("")}</optgroup>` : "") +
+    (other.length ? `<optgroup label="Other English">${other.map(v => `<option value="${esc(v.voiceURI)}">${esc(v.name)} (${esc(v.lang)})</option>`).join("")}</optgroup>` : "") +
+    (!vs.length ? `<option disabled>${synth ? "Voices are still loading…" : "Speech output isn't supported in this browser"}</option>` : "");
+  sel.value = cur; const rt = LS.get("jcd.rate") || "1"; $("vRate").value = rt; $("vRateV").textContent = (+rt).toFixed(2) + "×";
+  $("relistenChk").checked = pref("relisten", true); $("speakTypedChk").checked = pref("speakTyped", true); $("histChk").checked = pref("hist", true);
+}
+$("xkSave").onclick = () => { const v = $("xkIn").value.trim(); if (!v) return; LS.set("jarvis.key", v); $("xkIn").value = ""; settingsVoice(); renderNote(); renderDialog(); };
+$("xkForget").onclick = () => { LS.del("jarvis.key"); settingsVoice(); $("xkState").textContent = "Key forgotten on this device (this also removes it from the Jarvis HUD here)."; renderNote(); renderDialog(); };
+$("xModel").onchange = e => { const v = e.target.value.trim(); if (v) LS.set("jcd.model", v); else LS.del("jcd.model"); };
+$("vSel").onchange = e => { if (e.target.value) LS.set("jcd.voice", e.target.value); else LS.del("jcd.voice"); };
+$("vRate").oninput = e => { LS.set("jcd.rate", e.target.value); $("vRateV").textContent = (+e.target.value).toFixed(2) + "×"; };
+$("vTest").onclick = e => { e.preventDefault(); speak("Command Deck voice link online. Standing by."); };
+$("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" : "0");
+$("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
+$("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
+setInterval(() => { if (histQ.length) flushHistory(); }, 30000);
+window.__talk = { converse, parseReply, setMode, speak, D };
 
 // ---------- boot ----------
 async function boot() {
@@ -241,7 +487,7 @@ async function boot() {
     } catch (e) { console.warn("3D init failed", e); $("nogl").hidden = false; }
   } else $("nogl").hidden = false;
   line.textContent = "Linking Second Brain…";
-  renderAll(); if (!mobileQ.matches) openLeft("feed");
+  renderAll(); renderDialog(); setMode(null); if (!mobileQ.matches) openLeft("talk");
   setTimeout(() => { $("boot").classList.add("gone"); document.body.classList.add("ready"); }, 500);
   if (token()) poll(); else renderAll();
   setInterval(renderRouter, 60000);
