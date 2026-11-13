@@ -6,6 +6,7 @@ A standalone 3D command centre for a crew of Grok Bots. You talk only to **Jarvi
 - Live data comes from Second Brain: the Jarvis HUD **Inbox** note (requests) and **Bot Status** note (status lines), polled every 45 s.
 - Sending a message appends a `{id, createdAt, text, status:"new", routedTo:null, reply:null, repliedAt:null}` item to the Inbox note with ETag / If-Match (retries on 409/412).
 - After a request is appended to the Inbox note, the deck can POST to an instant-routing webhook (URL and sender key entered in **Settings**, stored only in the browser) so the job is handed to the right bot at once. Without that link, the request stays queued. The deck shows the result: an outbound beam when a request is routed, an inbound beam and the reply when it's answered.
+- A PIN lock (set on first use on a device) gates the deck until you unlock it. Only a salted hash is stored in the browser; the PIN itself is never kept or shipped in this repo. A forgotten PIN can reset the locally saved keys and settings (this does not change notes in Second Brain).
 - The access token, note ids, and the instant-routing webhook URL and key are entered in **Settings** at runtime and stored only in the browser (the token and note ids may be reused from the Jarvis HUD on the same origin). Nothing secret is in this repo.
 - Edit the crew in `config.js` (`ROSTER`).
 

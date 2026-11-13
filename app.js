@@ -1,5 +1,6 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, ROUTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=241";
+import { ROSTER, ROUTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=250";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=250";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -30,6 +31,7 @@ function hookStatus() {
   else el.textContent = "Not set. Paste the routine's webhook URL and sender key to pass jobs to the crew at once.";
 }
 async function pingRouter(item) {
+  if (S.suspended) return { instant: "unset" };
   if (!hookReady()) return { instant: "unset" };
   const h = hookCfg(), ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 8000);
   try {
@@ -66,6 +68,7 @@ function routeChip(m) {
 
 function noteUrl(id) { const c = conn(); return `${c.base}/context-sets/${encodeURIComponent(c.set)}/notes/${encodeURIComponent(id)}`; }
 async function sbGet(id) {
+  if (S.suspended) throw new Error("locked");
   const t = token(), c = conn(); if (!t) throw new Error("no token"); if (!okBase(c.base) || !c.set || !id) throw new Error("connection details missing");
   const r = await fetch(noteUrl(id), { headers: { Authorization: "Bearer " + t }, cache: "no-store" });
   if (!r.ok) throw new Error("HTTP " + r.status); const d = await r.json(); const n = d.note || d; return { n, etag: r.headers.get("ETag") };
@@ -73,6 +76,7 @@ async function sbGet(id) {
 function sbJson(md) { const m = /```json\s*([\s\S]*?)```/.exec(md || ""); return JSON.parse(m ? m[1] : md); }
 function sbMd(md, obj) { const j = "```json\n" + JSON.stringify(obj, null, 2) + "\n```"; return /```json[\s\S]*?```/.test(md) ? md.replace(/```json[\s\S]*?```/, () => j) : md + "\n\n" + j + "\n"; }
 async function sbAppend(text, routedTo = null) {
+  if (S.suspended) throw new Error("locked");
   const t = token(), c = conn(); if (!t) throw new Error("no token");
   for (let i = 0; i < 4; i++) {
     const { n, etag } = await sbGet(c.inbox); if (!etag) throw new Error("no ETag from Second Brain"); const o = sbJson(n.markdown); o.requests = Array.isArray(o.requests) ? o.requests : [];
@@ -104,7 +108,7 @@ const fmtTime = iso => { if (!iso) return ""; const d = new Date(iso); if (isNaN
 function ago(iso) { const s = (Date.now() - new Date(iso)) / 1000; if (!isFinite(s)) return ""; if (s < 60) return "just now"; if (s < 3600) return Math.round(s / 60) + "m ago"; if (s < 86400) return Math.round(s / 3600) + "h ago"; return Math.round(s / 86400) + "d ago"; }
 
 // ---------- state ----------
-const S = { inbox: [], bots: [], botByIdx: {}, at: 0, err: null, polling: false, selected: null, firstPoll: true, freshIds: new Set() };
+const S = { inbox: [], bots: [], botByIdx: {}, at: 0, err: null, polling: false, selected: null, firstPoll: true, freshIds: new Set(), suspended: false };
 let deck = null;
 let seen = {}; try { seen = JSON.parse(LS.get("jcd.seen") || "{}") || {}; } catch {}
 
@@ -115,11 +119,13 @@ function toast(html, ms = 4200) { const t = document.createElement("div"); t.cla
 // ---------- polling ----------
 let pollTimer = null, backoff = 0, pollChain = Promise.resolve();
 async function poll() {
+  if (S.suspended) return;
   const p = pollChain.then(pollOnce, pollOnce);
   pollChain = p.catch(() => {});
   return p;
 }
 async function pollOnce() {
+  if (S.suspended) return;
   const c = conn();
   S.polling = true;
   try {
@@ -129,7 +135,7 @@ async function pollOnce() {
     ingest();
   } catch (e) { S.err = e.message; backoff = Math.min(backoff + 1, 4); }
   S.polling = false; renderAll();
-  clearTimeout(pollTimer); pollTimer = setTimeout(() => { poll(); }, POLL_MS * (1 + backoff));
+  clearTimeout(pollTimer); if (!S.suspended) pollTimer = setTimeout(() => { poll(); }, POLL_MS * (1 + backoff));
 }
 async function confirmQueued(id) {
   if (!id || !token()) return false;
@@ -235,6 +241,9 @@ function openSettings() {
   $("connDet").open = !c.base; $("qSel").value = LS.get("jcd.quality") || "auto"; $("motionChk").checked = LS.get("jcd.reduced") === "1";
   $("hookUrl").value = hookCfg().url; $("hookKey").value = ""; hookStatus();
   $("verTag").textContent = "Command Deck v" + VERSION + (deck ? " · render tier " + deck.tierName : "");
+  $("lockAfter").value = String(getIdleMinutes());
+  $("lockSetState").textContent = hasPin() ? "A PIN is set on this device. Auto-lock uses the interval below." : "No PIN is set yet.";
+  $("lockChangeForm").hidden = true; $("lockCur").value = ""; $("lockN1").value = ""; $("lockN2").value = ""; $("lockChangeState").textContent = "";
   $("settings").hidden = false;
 }
 $("setBtn").onclick = openSettings; $("setClose").onclick = () => $("settings").hidden = true;
@@ -262,6 +271,23 @@ $("hookSave").onclick = () => {
 $("hookForget").onclick = () => { LS.del("jcd.hookUrl"); LS.del("jcd.hookKey"); $("hookUrl").value = ""; $("hookKey").value = ""; hookStatus(); renderRouter(); renderDossier(); renderNote(); };
 $("qSel").onchange = e => { LS.set("jcd.quality", e.target.value); toast("Reloading with new visual quality…", 1500); setTimeout(() => location.reload(), 700); };
 $("motionChk").onchange = e => { LS.set("jcd.reduced", e.target.checked ? "1" : "0"); setTimeout(() => location.reload(), 300); };
+
+$("lockAfter").onchange = e => setIdleMinutes(e.target.value);
+$("lockNowBtn").onclick = () => { $("settings").hidden = true; lockNow(); };
+$("lockChangeBtn").onclick = () => { $("lockChangeForm").hidden = !$("lockChangeForm").hidden; $("lockChangeState").textContent = ""; };
+$("lockChangeSave").onclick = async () => {
+  const cur = $("lockCur").value, a = $("lockN1").value, b = $("lockN2").value;
+  if (a !== b) { $("lockChangeState").textContent = "New PINs don't match."; return; }
+  const r = await changePin(cur, a);
+  if (!r.ok) { $("lockChangeState").textContent = r.error; return; }
+  $("lockCur").value = ""; $("lockN1").value = ""; $("lockN2").value = "";
+  $("lockChangeForm").hidden = true;
+  $("lockChangeState").textContent = "PIN changed on this device.";
+  $("lockSetState").textContent = "PIN changed. Auto-lock uses the interval below.";
+};
+$("lockResetBtn").onclick = () => {
+  if (confirm("Reset this deck? This clears every key and setting saved on this device, including the Second Brain token, the instant-routing link, and the xAI key. Then you'll set a new PIN. Notes in Second Brain are not changed.")) resetDeck();
+};
 document.addEventListener("keydown", e => { if (e.key === "Escape") { if (!$("settings").hidden) $("settings").hidden = true; else if (S.selected != null) select(null); else closeLeft(); } if (e.key === "/" && document.activeElement !== $("cmdIn") && $("settings").hidden) { e.preventDefault(); $("cmdIn").focus(); } });
 
 // ---------- v2: live conversational voice loop ----------
@@ -445,6 +471,7 @@ function parseReply(raw, userText) {
   return { reply, route };
 }
 async function askJarvis(text) {
+  if (S.suspended) throw new Error("locked");
   const input = [{ role: "system", content: await systemPrompt() }, ...D.hist.slice(-8), { role: "user", content: text }];
   const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 25000);
   try {
@@ -460,7 +487,7 @@ async function askJarvis(text) {
 // ----- one exchange: Commander -> Jarvis (-> optional route to a bot) -----
 let convBusy = false;
 async function converse(text, spoken) {
-  text = String(text || "").trim(); if (!text || convBusy) return;
+  text = String(text || "").trim(); if (!text || convBusy || S.suspended) return;
   if (keyish(text)) { toast("That looks like a key or token, so I haven't sent it anywhere."); return; }
   convBusy = true; $("sendBtn").disabled = true; addMsg("me", text);
   const speakIt = spoken || pref("speakTyped", true);
@@ -508,6 +535,7 @@ async function logHistory(q, a) {
 }
 let histBusy = false;
 async function flushHistory() {
+  if (S.suspended) return;
   const c = conn(); if (histBusy || !histQ.length || !token() || !c.hist) return; histBusy = true;
   try {
     for (let i = 0; i < 4 && histQ.length; i++) {
@@ -624,17 +652,17 @@ $("vTest").onclick = e => { e.preventDefault(); speak("Command Deck voice link o
 $("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" : "0");
 $("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
 $("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
-setInterval(() => { if (histQ.length) flushHistory(); }, 30000);
+setInterval(() => { if (!S.suspended && histQ.length) flushHistory(); }, 30000);
 window.__talk = { converse, parseReply, inferHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D };
 
-// ---------- boot ----------
-async function boot() {
+// ---------- boot (called by the PIN lock after unlock; not on page load) ----------
+export async function boot() {
   const line = $("bootLine");
   const gl = (() => { try { const c = document.createElement("canvas"); return !!(c.getContext("webgl2") || c.getContext("webgl")); } catch { return false; } })();
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=241");
+      const { Deck } = await import("./scene.js?v=250");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
@@ -645,6 +673,25 @@ async function boot() {
   setTimeout(() => { $("boot").classList.add("gone"); document.body.classList.add("ready"); }, 500);
   if (token()) poll(); else renderAll();
   setInterval(renderRouter, 60000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && token() && Date.now() - S.at > 15000) poll(); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && !S.suspended && token() && Date.now() - S.at > 15000) poll(); });
 }
-boot();
+
+export function suspendDeck() {
+  S.suspended = true;
+  try { setTalk(false); } catch {}
+  try { stopListening(true); } catch {}
+  try { stopSpeaking(true); } catch {}
+  try { stopMeter(); } catch {}
+  clearTimeout(pollTimer); pollTimer = null;
+  if (deck && deck.controls) deck.controls.enabled = false;
+  const gl = $("gl"); if (gl) gl.style.pointerEvents = "none";
+  const set = $("settings"); if (set) set.hidden = true;
+}
+
+export function resumeDeck() {
+  S.suspended = false;
+  if (deck && deck.controls) deck.controls.enabled = true;
+  const gl = $("gl"); if (gl) gl.style.pointerEvents = "";
+  bumpActivity();
+  if (token()) poll();
+}
