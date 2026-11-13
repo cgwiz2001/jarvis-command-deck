@@ -1,5 +1,5 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, ROUTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=231";
+import { ROSTER, ROUTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=232";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -30,19 +30,23 @@ function hookStatus() {
   else el.textContent = "Not set. Paste the routine's webhook URL and sender key to pass jobs to the crew at once.";
 }
 async function pingRouter(item) {
-  if (!hookReady()) return "unset";
+  if (!hookReady()) return { instant: "unset" };
   const h = hookCfg(), ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 8000);
   try {
     const r = await fetch(h.url, { method: "POST", signal: ctl.signal,
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + h.key, "X-Webhook-Key": h.key },
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + h.key },
       body: JSON.stringify({ event: "inbox-new", id: item && item.id, routedTo: (item && item.routedTo) || null }) });
-    return r.ok ? "ok" : "failed";
-  } catch { return "failed"; }
-  finally { clearTimeout(to); }
+    if (r.ok) return { instant: "ok" };
+    return { instant: "failed", error: "HTTP " + r.status };
+  } catch (e) {
+    const msg = e && e.name === "AbortError" ? "timed out" : ((e && e.message) || "Failed to fetch");
+    return { instant: "failed", error: msg };
+  } finally { clearTimeout(to); }
 }
-function instantLine(name, instant) {
+function instantLine(name, instant, confirmed) {
+  if (confirmed === false) return (name ? ("I queued that for " + name + ", ") : "It's queued, ") + "but I couldn't confirm it in the Inbox yet.";
   if (instant === "ok") return name ? (name + " has it now.") : "It's being routed now.";
-  if (instant === "failed") return "It's queued, but the instant link failed.";
+  if (instant === "failed") return name ? (name + " is queued.") : "It's queued.";
   return "queued; add the instant link in Settings.";
 }
 function routeChip(m) {
@@ -51,10 +55,12 @@ function routeChip(m) {
   let label = "not queued";
   if (r.ok) {
     if (r.instant === "ok") label = r.i > 0 ? "sent to " + ROSTER[r.i].name + " now" : "sent now";
-    else if (r.instant === "failed") label = "instant link failed";
+    else if (r.instant === "failed") label = "queued (instant link blocked by browser)";
     else label = "queued, instant link not set";
   }
-  return `<div class="rt">${who}<span>${label}</span></div>`;
+  const tip = r.hookErr ? ` title="${esc(r.hookErr)}"` : "";
+  const jq = r.ok && r.id ? `<div class="jq ${r.confirmed ? "ok" : "warn"}">Jobs queued · ${r.confirmed ? "in Inbox" : "not in Inbox yet"}</div>` : "";
+  return `<div class="rt"${tip}><div class="rt-row">${who}<span>${label}</span></div>${jq}</div>`;
 }
 
 
@@ -107,9 +113,15 @@ function toast(html, ms = 4200) { const t = document.createElement("div"); t.cla
   setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 520); }, ms); }
 
 // ---------- polling ----------
-let pollTimer = null, backoff = 0;
+let pollTimer = null, backoff = 0, pollChain = Promise.resolve();
 async function poll() {
-  if (S.polling) return; S.polling = true; const c = conn();
+  const p = pollChain.then(pollOnce, pollOnce);
+  pollChain = p.catch(() => {});
+  return p;
+}
+async function pollOnce() {
+  const c = conn();
+  S.polling = true;
   try {
     const [a, b] = await Promise.all([sbGet(c.status), sbGet(c.inbox)]);
     const st = sbJson(a.n.markdown), ib = sbJson(b.n.markdown);
@@ -117,7 +129,12 @@ async function poll() {
     ingest();
   } catch (e) { S.err = e.message; backoff = Math.min(backoff + 1, 4); }
   S.polling = false; renderAll();
-  clearTimeout(pollTimer); pollTimer = setTimeout(poll, POLL_MS * (1 + backoff));
+  clearTimeout(pollTimer); pollTimer = setTimeout(() => { poll(); }, POLL_MS * (1 + backoff));
+}
+async function confirmQueued(id) {
+  if (!id || !token()) return false;
+  try { await poll(); return S.inbox.some(r => r && r.id === id); }
+  catch { return false; }
 }
 function ingest() {
   S.botByIdx = {}; const states = {};
@@ -314,7 +331,7 @@ async function systemPrompt() {
   return (style ? "Your own Voice & Style notes (follow them):\n" + style + "\n\n" : "You are Jarvis, the user's chief of staff: calm, British, short and precise, with a little dry humour.\n\n") +
 `You are speaking through the Jarvis Command Deck, a live voice link. It is a HUD surface, so use the user's name only when it adds something.
 Reply in one to three short spoken sentences: plain natural speech with contractions, no markdown, lists, symbols, emoji or URLs.
-You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, route it: the deck adds it to your Second Brain inbox addressed to that bot. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a routed job is done or started; say you've passed it on or queued it. If your spoken reply says you are passing, routing, sending or handing a job to a crew member, route MUST be a non-null object with that bot's exact crew name and a task brief. Never say you have passed a job on unless route is set. Do not say when the bot will pick it up; the deck adds that.
+You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, set route to a non-null object with that bot's exact crew name and a short task brief; the deck then adds it to your Second Brain inbox addressed to that bot. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a job is done or started. Never say "route sent", "passed on", "queued", "I've passed", "I'll pass", "sent to", "routed" or similar yourself — the deck appends the real outcome line after it actually queues the job. In the spoken reply, just say briefly what that bot will be asked to do, without claiming it has already been sent. Do not say when the bot will pick it up.
 Crew (name: role · live status snapshot, may be out of date):
 ${crewBrief()}
 Current date and time: ${now} (Europe/London).
@@ -347,18 +364,67 @@ function routeFrom(o) {
   const i = botIndex(name); return i > 0 ? { i, task: String(task || "").trim() } : null;
 }
 function claimingHandoff(text) {
-  return /\b(?:pass(?:ing|ed)?|rout(?:e|ed|ing)|send(?:ing)?|sent|hand(?:ing|ed)?)\b[\s\S]{0,100}?\bto\s+[A-Za-z]/i.test(String(text || ""));
+  const t = String(text || "");
+  if (/\b(?:route sent|passed on|i(?:'ve| have) passed|i(?:'ll| will) pass|sent to|queued|routed)\b/i.test(t)) return true;
+  return /\b(?:pass(?:ing|ed)?|rout(?:e|ed|ing)|send(?:ing)?|sent|hand(?:ing|ed)?)\b[\s\S]{0,100}?\bto\s+[A-Za-z]/i.test(t);
+}
+function mentionedCrew(text) {
+  const names = ROSTER.slice(1).map(b => b.name).sort((a, b) => b.length - a.length);
+  const re = new RegExp("\\b(" + names.join("|") + ")\\b", "gi");
+  const found = []; let m;
+  while ((m = re.exec(String(text || "")))) {
+    const i = botIndex(m[1]);
+    if (i > 0 && !found.some(f => f.i === i)) found.push({ i, name: ROSTER[i].name, at: m.index });
+  }
+  return found;
 }
 function inferHandoff(reply, userText) {
-  const t = String(reply || "");
+  const t = String(reply || ""), task = String(userText || "").trim();
+  const names = mentionedCrew(t);
+  if (names.length) {
+    const cue = /\b(?:was |is |has been |have been |will be |will |'s |’s )?(?:handl(?:e|es|ed|ing)|check(?:s|ed|ing)?(?:\s+(?:in\s+)?with)?|ask(?:s|ed|ing)?)\b/i;
+    const pass = /\b(?:pass(?:ing|ed)?|rout(?:e|ed|ing)|send(?:ing)?|sent|hand(?:ing|ed)?(?:\s+over)?|queue(?:d|ing)?)\b/i;
+    for (const n of names) {
+      const win = t.slice(Math.max(0, n.at - 90), n.at + n.name.length + 90);
+      if (cue.test(win) || pass.test(win) || /\bto\s+$/i.test(t.slice(Math.max(0, n.at - 16), n.at))) return { i: n.i, task };
+    }
+    if (/\broute sent\b|\bqueued\b|\bpassed on\b|\brouted\b|\bsent to\b/i.test(t)) return { i: names[0].i, task };
+  }
   if (!claimingHandoff(t)) return null;
   const re = /\bto\s+([A-Za-z][A-Za-z ·-]{0,40})/gi; let m;
-  while ((m = re.exec(t))) { const i = botIndex(m[1]); if (i > 0) return { i, task: String(userText || "").trim() }; }
+  while ((m = re.exec(t))) { const i = botIndex(m[1]); if (i > 0) return { i, task }; }
   return null;
 }
+function stripRouteClaims(reply) {
+  let t = String(reply || "");
+  t = t.replace(/\broute sent\b/gi, "");
+  t = t.replace(/\bi(?:'ve| have) (?:already )?(?:passed(?: it| that| this)?(?: on)?(?: to [^.?!,]*)?|routed(?: it| that| this)?(?: to [^.?!,]*)?|queued(?: it| that| this)?(?: for [^.?!,]*)?|sent(?: it| that| this)?(?: on)?(?: to [^.?!,]*)?)\b/gi, "");
+  t = t.replace(/\bi(?:'ll| will) (?:pass(?: that| it| this)?(?: on)?|route|queue|send)(?:\s+(?:that|it|this))?(?:\s+on)?(?:\s+to [^.?!,]*)?/gi, "");
+  t = t.replace(/\b(?:i(?:'ve| have) )?sent(?: it| that| this)? to [A-Za-z][A-Za-z ·-]*\b/gi, "");
+  t = t.replace(/\b(?:it(?:'s| is| has been| was)? )?(?:being )?(?:queued|routed(?: to [A-Za-z][A-Za-z ·-]*)?)\b/gi, "");
+  t = t.replace(/\bpassed on\b/gi, "");
+  t = t.replace(/\brouted\b/gi, "");
+  t = t.replace(/[ \t]+/g, " ").replace(/ +([,;:!?])/g, "$1").replace(/\s*\.\s*(?=\.)/g, "").replace(/(?:^|[.!?])\s*[.,;:]+/g, m => /^[.!?]/.test(m) ? m.charAt(0) : "");
+  return t.replace(/^[,;.\s]+/, "").replace(/\s+/g, " ").trim();
+}
 function withoutHandoffClaim(reply) {
-  if (!claimingHandoff(reply)) return reply;
-  return "I haven't queued that for a crew member yet. Please say it again and I'll make sure it's passed on.";
+  const t = stripRouteClaims(reply);
+  if (t) return t;
+  if (claimingHandoff(reply)) return "I haven't sent that to a crew member yet. Please say it again and I'll make sure it goes through.";
+  return reply;
+}
+function userHasTask(text) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  const deckTalk = /\b(instant link|webhook|command deck|this deck|settings webhook)\b/i.test(t)
+    || (/^\s*(why|how|what)\b/i.test(t) && /\b(link|route|routing|queue|queued|webhook|fail|failing|blocked)\b/i.test(t));
+  const hasAction = /\b(please|can you|could you|would you|i need|i want you to|ask |tell |check |get |fetch |send |draft |write |make |fix |look(?:ing)? at|review |handle |prepare |pull |find |schedule |book |remind |update |create )\b/i.test(t)
+    || /^(check|get|fetch|send|draft|write|make|fix|review|handle|prepare|find|schedule|book|remind|update|create|add)\b/i.test(t);
+  if (deckTalk && !hasAction) return false;
+  if (deckTalk && !/\b(ask |tell |pass |route |send (?:this|that|it) to)\b/i.test(t) && !mentionedCrew(t).length) return false;
+  if (hasAction) return true;
+  if (/^(ok|okay|thanks|thank you|cheers|right|yes|no|yep|nope|got it|and|what|why|how)[.!?]*$/i.test(t)) return false;
+  return false;
 }
 function parseReply(raw, userText) {
   let t = String(raw || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
@@ -367,6 +433,7 @@ function parseReply(raw, userText) {
   if (js) { try { const o = JSON.parse(js); reply = String(o.reply || "").trim(); route = routeFrom(o); } catch { } }
   if (!reply) reply = t.replace(/[{}"]/g, "").trim();
   if (!route) route = inferHandoff(reply, userText) || inferHandoff(t, userText);
+  if (route && !userHasTask(userText)) route = null;
   return { reply, route };
 }
 async function askJarvis(text) {
@@ -394,8 +461,9 @@ async function converse(text, spoken) {
       let reply, route = null;
       if (!token()) reply = "I can't reply instantly without an xAI key, and Second Brain isn't linked either. Add both in Settings.";
       else { try { const item = await sbAppend(text); markSent(item); deck && deck.intake();
-          const instant = await pingRouter(item); route = { i: -1, ok: true, instant };
-          reply = "No instant replies without an xAI key, so I've added that to my inbox. " + instantLine(null, instant); poll(); }
+          const ping = await pingRouter(item); const confirmed = await confirmQueued(item.id);
+          route = { i: -1, ok: true, instant: ping.instant, hookErr: ping.error, id: item.id, confirmed };
+          reply = "No instant replies without an xAI key, so I've added that to my inbox. " + instantLine(null, ping.instant, confirmed); }
         catch (e) { reply = "I couldn't add that to my inbox just now (" + e.message + ")."; } }
       addMsg("jv", reply, route ? { route } : null); if (speakIt) speak(reply); else setMode(null); return;
     }
@@ -405,14 +473,15 @@ async function converse(text, spoken) {
       addMsg("sys", "Jarvis couldn't reply (" + msg + ")."); if (speakIt) speak("Sorry, I couldn't reach my reply service just then."); else setMode(null); return; }
     D.thinking = false;
     let reply = res.reply || "Understood.", route = null;
-    if (!res.route) reply = withoutHandoffClaim(reply);
     if (res.route) {
       const i = res.route.i, name = ROSTER[i].name; deck && deck.fire(i, "out"); route = { i, ok: false };
-      if (!token()) reply += ` Second Brain isn't linked on this device, so ${name} hasn't got it yet.`;
+      if (!token()) reply = [withoutHandoffClaim(reply), "Second Brain isn't linked on this device, so " + name + " hasn't got it yet."].filter(Boolean).join(" ");
       else try { const item = await sbAppend(res.route.task || text, name); markSent(item); route.ok = true; route.id = item.id;
-          route.instant = await pingRouter(item); reply += " " + instantLine(name, route.instant); poll(); }
-        catch (e) { reply += ` I couldn't add it to my inbox just now, so ${name} hasn't got it yet.`; }
-    }
+          const ping = await pingRouter(item); route.instant = ping.instant; route.hookErr = ping.error;
+          route.confirmed = await confirmQueued(item.id);
+          reply = [withoutHandoffClaim(reply), instantLine(name, route.instant, route.confirmed)].filter(Boolean).join(" "); }
+        catch (e) { reply = [withoutHandoffClaim(reply), "I couldn't add it to my inbox just now, so " + name + " hasn't got it yet."].filter(Boolean).join(" "); }
+    } else reply = withoutHandoffClaim(reply);
     D.hist.push({ role: "user", content: text }, { role: "assistant", content: reply }); D.hist = D.hist.slice(-12);
     addMsg("jv", reply, route ? { route } : null);
     logHistory(text, reply);
@@ -548,7 +617,7 @@ $("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" :
 $("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
 $("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
 setInterval(() => { if (histQ.length) flushHistory(); }, 30000);
-window.__talk = { converse, parseReply, inferHandoff, withoutHandoffClaim, setMode, speak, D };
+window.__talk = { converse, parseReply, inferHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D };
 
 // ---------- boot ----------
 async function boot() {
@@ -557,7 +626,7 @@ async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=231");
+      const { Deck } = await import("./scene.js?v=232");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
