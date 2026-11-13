@@ -193,7 +193,7 @@ async function accept() {
   unlockWaiters.splice(0).forEach(fn => fn());
   if (!started) {
     started = true;
-    app = await import("./app.js?v=251");
+    app = await import("./app.js?v=260");
     await app.boot();
   } else if (app && app.resumeDeck) {
     app.resumeDeck();
@@ -378,7 +378,42 @@ function askReset() {
   showReset(true);
 }
 
+function pwaToast(msg, onTap) {
+  const host = document.getElementById("toasts");
+  if (!host) return;
+  const t = document.createElement("div");
+  t.className = "toast glass";
+  t.textContent = msg;
+  t.style.cursor = "pointer";
+  t.addEventListener("click", () => { t.remove(); if (onTap) onTap(); });
+  host.appendChild(t);
+}
+
+function registerPwa() {
+  if (!("serviceWorker" in navigator)) return;
+  const ready = () => navigator.serviceWorker.register("./sw.js").then(reg => {
+    const prompt = worker => {
+      pwaToast("Update available, tap to reload", () => {
+        if (worker && worker.state !== "redundant") {
+          try { worker.postMessage({ type: "SKIP_WAITING" }); } catch {}
+        }
+        location.reload();
+      });
+    };
+    if (reg.waiting && navigator.serviceWorker.controller) prompt(reg.waiting);
+    reg.addEventListener("updatefound", () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener("statechange", () => {
+        if (nw.state === "installed" && navigator.serviceWorker.controller) prompt(nw);
+      });
+    });
+  }).catch(() => {});
+  ready();
+}
+
 function start() {
+  registerPwa();
   wire();
   if (!hasPin()) {
     mode = "set";

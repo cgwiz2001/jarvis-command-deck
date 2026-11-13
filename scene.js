@@ -7,7 +7,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { makeAvatar, animateAvatar } from "./avatars.js?v=251";
+import { makeAvatar, animateAvatar } from "./avatars.js?v=260";
 
 const NOISE = /* glsl */`
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
@@ -172,14 +172,14 @@ export class Deck {
     if (labelsEl) { labelsEl.classList.remove("q-high", "q-mid", "q-low"); labelsEl.classList.add("q-" + this.tierName); }
     this.reduced = !!opts.reduced; this.tweens = []; this.beams = []; this.links = new Map(); this.flares = [];
     this.hover = null; this.selected = null; this.onSelect = opts.onSelect || (() => {}); this.onHover = opts.onHover || (() => {});
-    this.t0 = performance.now(); this.lastInteract = -1e9; this.fpsAcc = []; this.dprTimer = 0;
+    this.t0 = performance.now(); this.lastInteract = -1e9; this.fpsAcc = []; this.dprTimer = 0; this.dprSkip = 0; this.resizeCount = 0; this.dprDowns = 0;
     this.init();
   }
   init() {
-    const r = this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: "high-performance", alpha: false, stencil: false });
+    const r = this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: "high-performance", alpha: false, stencil: false, failIfMajorPerformanceCaveat: false });
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.05; r.outputColorSpace = THREE.SRGBColorSpace;
     this.dpr = Math.min(window.devicePixelRatio || 1, this.tier.maxDpr); r.setPixelRatio(this.dpr);
-    const s = this.scene = new THREE.Scene(); s.background = new THREE.Color(0x03070d); s.fog = new THREE.FogExp2(0x06111c, .010);
+    const s = this.scene = new THREE.Scene(); s.background = new THREE.Color(0x020611); s.fog = new THREE.FogExp2(0x03081a, .007);
     const pm = new THREE.PMREMGenerator(r); s.environment = pm.fromScene(new RoomEnvironment(), .04).texture; pm.dispose();
     s.environmentIntensity = .55;
     this.camera = new THREE.PerspectiveCamera(42, 1, .1, 1200);
@@ -188,7 +188,7 @@ export class Deck {
     const c = this.controls = new OrbitControls(this.camera, this.canvas);
     c.enableDamping = true; c.dampingFactor = .06; c.enablePan = false; c.minDistance = 7; c.maxDistance = 52;
     c.maxPolarAngle = Math.PI * .56; c.minPolarAngle = Math.PI * .12; c.rotateSpeed = .6; c.zoomSpeed = .8;
-    c.autoRotate = !this.reduced; c.autoRotateSpeed = .22; c.target.copy(this.home.target);
+    c.autoRotate = !this.reduced; c.autoRotateSpeed = this.reduced ? .06 : .22; c.target.copy(this.home.target);
     c.addEventListener("start", () => { this.lastInteract = performance.now(); this.userDriving = true; });
     c.addEventListener("end", () => { this.lastInteract = performance.now(); this.userDriving = false; });
     this.glowTex = glowTexture([[0, "rgba(255,255,255,1)"], [.18, "rgba(255,255,255,.55)"], [.45, "rgba(255,255,255,.12)"], [1, "rgba(255,255,255,0)"]]);
@@ -200,7 +200,7 @@ export class Deck {
     this.buildSky(); this.buildStars(); this.buildFloor(); this.buildCore(); this.buildNodes(); this.buildPost();
     this.raycaster = new THREE.Raycaster(); this.ptr = new THREE.Vector2(9, 9); this.ptrActive = false;
     this.bindInput(); this.resize(); addEventListener("resize", () => this.resize());
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) { this.last = performance.now(); } });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) { this.last = performance.now(); this.fpsAcc = []; this.dprSkip = 30; } });
     this.intro(); this.last = performance.now(); this.loop = this.loop.bind(this); requestAnimationFrame(this.loop);
   }
   buildSky() {
@@ -209,17 +209,17 @@ export class Deck {
       fragmentShader: `uniform float uTime; varying vec3 vD; varying vec4 vClip;
         void main(){ vec3 d=normalize(vD);
           float t=clamp(.5-vClip.y/max(vClip.w,1e-4)*.5,0.,1.);
-          vec3 top=vec3(.012,.027,.051);
-          vec3 upper=vec3(.024,.067,.110);
-          vec3 mid=vec3(.039,.118,.165);
+          vec3 top=vec3(.008,.024,.067);
+          vec3 upper=vec3(.012,.031,.102);
+          vec3 mid=vec3(.024,.086,.145);
           vec3 low=vec3(.055,.227,.290);
           vec3 glow=vec3(.122,.498,.600);
-          vec3 c=mix(top,upper,smoothstep(0.,.32,t));
-          c=mix(c,mid,smoothstep(.28,.55,t));
-          c=mix(c,low,smoothstep(.52,.80,t));
-          c=mix(c,glow,smoothstep(.74,1.,t)*.28);
+          vec3 c=mix(top,upper,smoothstep(0.,.22,t));
+          c=mix(c,mid,smoothstep(.28,.58,t));
+          c=mix(c,low,smoothstep(.58,.85,t));
+          c=mix(c,glow,smoothstep(.80,1.,t)*.32);
           float rh=smoothstep(-.2,.95,d.x)*smoothstep(-.75,.2,d.y);
-          c+=vec3(.051,.165,.212)*rh*.20;
+          c+=vec3(.051,.165,.212)*rh*.12;
           gl_FragColor=vec4(c,1.); }` });
     this.sky = new THREE.Mesh(new THREE.SphereGeometry(600, 48, 32), m); this.sky.frustumCulled = false; this.scene.add(this.sky);
   }
@@ -237,19 +237,22 @@ export class Deck {
       g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); g.setAttribute("color", new THREE.BufferAttribute(col, 3));
       g.setAttribute("size", new THREE.BufferAttribute(sz, 1)); g.setAttribute("phase", new THREE.BufferAttribute(ph, 1));
       g.setAttribute("spark", new THREE.BufferAttribute(sp, 1));
-      const m = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, uniforms: { uTime: { value: 0 }, uDpr: { value: this.dpr } },
-        vertexShader: `attribute float size; attribute float phase; attribute float spark; attribute vec3 color; uniform float uTime; uniform float uDpr; varying vec3 vC; varying float vA;
+      const m = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, uniforms: { uTime: { value: 0 }, uDpr: { value: this.dpr }, uTwinkle: { value: this.reduced ? 0 : 1 } },
+        vertexShader: `attribute float size; attribute float phase; attribute float spark; attribute vec3 color; uniform float uTime; uniform float uDpr; uniform float uTwinkle; varying vec3 vC; varying float vA;
           void main(){ vec4 mv=modelViewMatrix*vec4(position,1.); gl_Position=projectionMatrix*mv;
-            float breath=.78+.22*sin(uTime*.28+phase);
-            float glint=spark*pow(max(sin(uTime*.45+phase),0.),8.)*.85;
+            float breath=.78+.22*sin(uTime*.28+phase)*uTwinkle;
+            float glint=spark*uTwinkle*pow(max(sin(uTime*.45+phase),0.),8.)*.85;
             vA=(.55*breath+glint); vC=color;
-            gl_PointSize=size*uDpr*(200./-mv.z)*(1.+glint*.4); }`,
+            float ps=size*uDpr*(200./-mv.z)*(1.+glint*.4);
+            vA*=smoothstep(.6,1.5,ps);
+            gl_PointSize=max(ps,1.5); }`,
         fragmentShader: `varying vec3 vC; varying float vA; void main(){ vec2 p=gl_PointCoord-.5; float d=length(p); float a=smoothstep(.5,.0,d); a=a*a; float core=smoothstep(.14,0.,d); gl_FragColor=vec4(vC*(a*vA+core*vA),a*vA+core*vA*.6); }` });
       const p = new THREE.Points(g, m); p.frustumCulled = false; return p;
     };
     this.stars = mk(this.tier.stars, 90, 420, .35, 1.05, ["#8aa4b0", "#5a7480", "#6a8a96", "#4a6a76"], .12);
     this.dust = mk(this.tier.dust, 10, 48, .2, .45, ["#1a2a32", "#223c47"], 0);
     this.dust.material.uniforms.uDpr = this.stars.material.uniforms.uDpr;
+    this.dust.material.uniforms.uTwinkle = this.stars.material.uniforms.uTwinkle;
     this.scene.add(this.stars, this.dust);
   }
   buildFloor() {
@@ -262,7 +265,7 @@ export class Deck {
           float wash=exp(-r*.11)*.18;
           float orbit=exp(-pow((r-uR)*10.,2.))*.055 + exp(-pow((r-uR)*1.8,2.))*.015;
           float pt=uTime-uPulseT; float pulse=exp(-pow((r-pt*9.)*1.4,2.))*exp(-pt*.9)*step(0.,pt)*.55;
-          vec3 c=vec3(.055,.20,.26)*wash + vec3(.28,.58,.64)*orbit + vec3(.70,.88,.92)*pulse*.3;
+          vec3 c=vec3(.035,.16,.24)*wash + vec3(.22,.55,.66)*orbit + vec3(.70,.88,.92)*pulse*.3;
           gl_FragColor=vec4(c*fade,1.); }` });
     const f = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), m); f.rotation.x = -Math.PI / 2; f.position.y = -2.6; this.scene.add(f);
   }
@@ -332,7 +335,7 @@ export class Deck {
   }
   makeLabel(bot, core) {
     const el = document.createElement("div"); el.className = "nl" + (core ? " core" : ""); el.style.setProperty("--c", bot.color);
-    el.innerHTML = `<div class="n"><i></i>${bot.name.toUpperCase()}</div><div class="r">${bot.title}</div>`;
+    el.innerHTML = `<i class="nl-lead" aria-hidden="true"></i><div class="n"><i></i>${bot.name.toUpperCase()}</div><div class="r">${bot.title}</div>`;
     el.addEventListener("click", e => { e.stopPropagation(); this.select(this.roster.indexOf(bot)); });
     el.addEventListener("pointerenter", () => this.setHover(this.roster.indexOf(bot)));
     el.addEventListener("pointerleave", () => this.setHover(null));
@@ -367,26 +370,36 @@ export class Deck {
     comp.addPass(new RenderPass(this.scene, this.camera));
     const bloom = this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), this.tierName === "low" ? .32 : .42, .42, .82);
     const origSet = bloom.setSize.bind(bloom), sc = this.tier.bloomScale; bloom.setSize = (w, h) => origSet(Math.max(64, Math.round(w * sc)), Math.max(64, Math.round(h * sc)));
-    comp.addPass(bloom); if (/nobloom/.test(location.search)) bloom.enabled = false; comp.addPass(new OutputPass());
-    this.finish = new ShaderPass({ uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uRes: { value: new THREE.Vector2(1, 1) }, uGrain: { value: this.tierName === "low" ? .008 : .012 } },
+    comp.addPass(bloom); if (/nobloom/.test(location.search) || this.reduced) bloom.enabled = false; comp.addPass(new OutputPass());
+    this.finish = new ShaderPass({ uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uRes: { value: new THREE.Vector2(1, 1) }, uGrain: { value: this.reduced ? 0 : this.tierName === "high" ? .012 : .01 }, uGrainAnim: { value: (!this.reduced && this.tierName === "high") ? 1 : 0 } },
       vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
-      fragmentShader: `uniform sampler2D tDiffuse; uniform float uTime; uniform vec2 uRes; uniform float uGrain; varying vec2 vUv;
-        float h(vec2 p){ return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453); }
+      fragmentShader: `uniform sampler2D tDiffuse; uniform float uTime; uniform vec2 uRes; uniform float uGrain; uniform float uGrainAnim; varying vec2 vUv;
+        float h(vec2 p){ vec3 p3=fract(vec3(p.xyx)*vec3(.1031,.1030,.0973)); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
         void main(){ vec2 d=vUv-.5; float r2=dot(d,d);
           vec2 off=d*r2*.008; vec3 c; c.r=texture2D(tDiffuse,vUv+off).r; c.g=texture2D(tDiffuse,vUv).g; c.b=texture2D(tDiffuse,vUv-off).b;
           float vig=smoothstep(1.05,.16,r2*1.85); c*=mix(.36,1.,vig);
-          float g=h(vUv*uRes+fract(uTime*7.1)*vec2(91.,37.))-.5; c+=g*uGrain;
+          float g=h(gl_FragCoord.xy+uGrainAnim*floor(uTime*12.)*vec2(91.,37.))-.5; c+=g*uGrain;
           c+=vec3(.051,.165,.212)*smoothstep(.12,.92,vUv.x)*smoothstep(1.,.22,r2)*.16;
           c+=vec3(.004,.012,.02)*(1.-vig);
           gl_FragColor=vec4(c,1.); }` });
     comp.addPass(this.finish);
   }
   resize() {
-    const w = innerWidth, h = innerHeight; this.w = w; this.h = h;
-    this.renderer.setPixelRatio(this.dpr); this.renderer.setSize(w, h, false);
-    this.composer.setPixelRatio(this.dpr); this.composer.setSize(w, h);
-    this.finish.uniforms.uRes.value.set(w * this.dpr, h * this.dpr);
-    this.stars.material.uniforms.uDpr.value = this.dpr;
+    const w = innerWidth, hRaw = innerHeight;
+    if (this._stableH == null) this._stableH = hRaw;
+    const widthChanged = this.w != null && w !== this.w;
+    const dh = Math.abs(hRaw - this._stableH);
+    // Ignore visualViewport / address-bar height jitter when width is unchanged.
+    if (this.w != null && !widthChanged && dh < 80) { /* keep this._stableH */ }
+    else this._stableH = hRaw;
+    const h = this._stableH, dpr = this.dpr;
+    if (this.w === w && this.h === h && this.sizedDpr === dpr) return;
+    this.w = w; this.h = h; this.sizedDpr = dpr; this.resizeCount = (this.resizeCount || 0) + 1;
+    if (this.labelsEl) this.labelsEl.querySelectorAll(".nl").forEach(el => { el._mkey = ""; });
+    this.renderer.setPixelRatio(dpr); this.renderer.setSize(w, h, false);
+    this.composer.setPixelRatio(dpr); this.composer.setSize(w, h);
+    this.finish.uniforms.uRes.value.set(w * dpr, h * dpr);
+    this.stars.material.uniforms.uDpr.value = dpr;
     const a = w / h; this.camera.aspect = a;
     const portrait = a < .8; this.camera.fov = portrait ? 66 : 42;
     const hf = Math.atan(Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * a), fit = (this.orbitR + 1.4) / Math.tan(hf) * (portrait ? 1.1 : .82);
@@ -475,13 +488,16 @@ export class Deck {
   }
   adapt(dt) {
     if (this.opts.quality && this.opts.quality !== "auto") return;
-    this.fpsAcc.push(dt); if (this.fpsAcc.length < 45) return;
-    const avg = this.fpsAcc.reduce((a, b) => a + b, 0) / this.fpsAcc.length; this.fpsAcc = [];
-    const fps = 1000 / avg; this.fps = fps; let nd = this.dpr;
-    if (fps < 48 && this.dpr > this.tier.minDpr) nd = Math.max(this.tier.minDpr, this.dpr - .15);
-    else if (fps > 58 && this.dpr < Math.min(devicePixelRatio || 1, this.tier.maxDpr)) { this.dprTimer++; if (this.dprTimer > 3) { nd = Math.min(this.tier.maxDpr, this.dpr + .1); this.dprTimer = 0; } }
-    if (fps < 30 && this.dpr <= this.tier.minDpr + .01 && this.bloom.enabled && this.tierName === "low") this.bloom.strength = .36;
-    if (Math.abs(nd - this.dpr) > .01) { this.dpr = nd; this.resize(); }
+    if (this.dprSkip > 0) { this.dprSkip--; return; }
+    this.fpsAcc.push(dt);
+    if (this.fpsAcc.length < 90) return;
+    const sorted = this.fpsAcc.slice().sort((a, b) => a - b);
+    const mid = sorted[sorted.length >> 1]; this.fpsAcc = [];
+    const fps = 1000 / mid; this.fps = fps;
+    if (fps < 45 && this.dpr > this.tier.minDpr) {
+      const next = Math.max(this.tier.minDpr, Math.round((this.dpr - .25) * 4) / 4);
+      if (next < this.dpr - .01) { this.dpr = next; this.dprSkip = 30; this.dprDowns = (this.dprDowns || 0) + 1; this.resize(); }
+    }
   }
   loop(now) {
     requestAnimationFrame(this.loop);
@@ -527,6 +543,7 @@ export class Deck {
     this.ticks.rotation.y = -t * .06 * mo; this.motes.rotation.y = t * .18 * mo; if (this.scans) this.scans.children.forEach(sc => { sc.rotation.y += sc.userData.spd * ds * mo; });
     // nodes
     const tmp = new THREE.Vector3();
+    const labItems = this._labItems || (this._labItems = []); labItems.length = 0;
     this.nodes.forEach((n, k) => {
       const delay = .9 + k * .09, ap = Math.min(1, Math.max(0, (t - delay) / .9)); n.appear = ap;
       const ang = n.base + t * .018 * mo; const y = Math.sin(t * .7 + n.bob) * .28 + Math.sin(k * 2.1) * .5;
@@ -542,9 +559,11 @@ export class Deck {
       n.ring.material.color.set(st === "waiting" ? "#fbbf24" : n.bot.color); n.ring.material.opacity = ({ working: .42, waiting: .36, idle: .14, unknown: .07 }[st] + n.flare * .3) * ap;
       n.sel.material.opacity = n.selK * .9; n.sel.rotation.set(Math.PI / 2 + Math.sin(t * .9) * .12, Math.cos(t * .7) * .12, t * .5); n.sel.position.y = -.2; n.sel.scale.setScalar(1 + Math.sin(t * 3) * .03);
       n.grp.getWorldPosition(n.world);
-      tmp.copy(n.world); tmp.y += n.av.top + 1.2; this.place(n.label, tmp, ap);
+      tmp.copy(n.world); tmp.y += n.av.top + 1.2;
+      labItems.push({ el: n.label, v: tmp.clone(), op: ap });
     });
-    this.place(this.coreLabel, tmp.set(0, 2.55, 0), Math.min(1, t / 1.2));
+    labItems.push({ el: this.coreLabel, v: new THREE.Vector3(0, 2.55, 0), op: Math.min(1, t / 1.2) });
+    this.layoutLabels(labItems);
     // hover raycast (desktop)
     if (this.ptrActive) this.setHover(this.pick());
     // transient beams
@@ -570,12 +589,87 @@ export class Deck {
     this.finish.uniforms.uTime.value = t;
     this.composer.render();
   }
-  place(el, v, op) {
-    const p = v.clone().project(this.camera); const vis = p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
-    if (!vis) { el.style.opacity = 0; return; }
-    const x = (p.x * .5 + .5) * this.w, y = (-p.y * .5 + .5) * this.h;
-    const dist = this.camera.position.distanceTo(v); const s = Math.max(.72, Math.min(1.15, 18 / dist));
-    el.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) translate(-50%,-100%) scale(${s.toFixed(3)})`;
-    el.style.opacity = el.classList.contains("dim") ? .35 * op : op; el.style.zIndex = String(1000 - Math.round(dist * 10));
+  measureLabel(el) {
+    const key = (el.classList.contains("sel") ? "s" : "") + (el.classList.contains("hov") ? "h" : "") + this.w + "x" + this.h;
+    if (el._mkey === key && el._lw) return;
+    el._lw = Math.max(1, el.offsetWidth);
+    el._lh = Math.max(1, el.offsetHeight);
+    el._mkey = key;
+  }
+  layoutLabels(items) {
+    const w = this.w, h = this.h, cam = this.camera;
+    const mt = (w <= 820 ? 70 : 18), mb = (w <= 820 ? 136 : 96), mx = 8, gap = 6;
+    let leftPad = mx, rightPad = mx;
+    if (w > 820) {
+      const L = document.getElementById("left"), R = document.getElementById("right");
+      if (L && L.classList.contains("open")) { const r = L.getBoundingClientRect(); if (r.width > 40) leftPad = Math.max(leftPad, Math.round(r.right) + 8); }
+      if (R && R.classList.contains("open")) { const r = R.getBoundingClientRect(); if (r.width > 40) rightPad = Math.max(rightPad, Math.round(w - r.left) + 8); }
+    }
+    const boxes = [];
+    for (const it of items) {
+      const el = it.el, p = it.v.clone().project(cam);
+      const vis = p.z < 1 && Math.abs(p.x) < 1.35 && Math.abs(p.y) < 1.35;
+      if (!vis) { boxes.push({ el, vis: false, op: it.op }); continue; }
+      this.measureLabel(el);
+      const ax = (p.x * .5 + .5) * w, ay = (-p.y * .5 + .5) * h;
+      const dist = cam.position.distanceTo(it.v), s = Math.max(.72, Math.min(1.15, 18 / dist));
+      const lw = el._lw * s, lh = el._lh * s;
+      boxes.push({ el, vis: true, ax, ay, lx: ax - lw / 2, ly: ay - lh, lw, lh, s, dist, op: it.op });
+    }
+    const clampBox = b => { b.lx = Math.max(leftPad, Math.min(w - rightPad - b.lw, b.lx)); b.ly = Math.max(mt, Math.min(h - mb - b.lh, b.ly)); };
+    const visB = boxes.filter(b => b.vis);
+    visB.forEach(clampBox);
+    for (let iter = 0; iter < 4; iter++) {
+      for (let i = 0; i < visB.length; i++) {
+        for (let j = i + 1; j < visB.length; j++) {
+          const a = visB[i], o = visB[j];
+          if (!(a.lx < o.lx + o.lw + gap && a.lx + a.lw + gap > o.lx && a.ly < o.ly + o.lh + gap && a.ly + a.lh + gap > o.ly)) continue;
+          const aCore = a.el.classList.contains("core"), oCore = o.el.classList.contains("core");
+          let move = a, stay = o;
+          if (aCore && !oCore) { move = o; stay = a; }
+          else if (!aCore && oCore) { move = a; stay = o; }
+          else if (a.ay > o.ay) { move = a; stay = o; }
+          if (move.ay <= stay.ay) move.ly = stay.ly - move.lh - gap;
+          else move.ly = stay.ly + stay.lh + gap;
+          clampBox(move);
+        }
+      }
+      for (const a of visB) {
+        for (const o of visB) {
+          if (a === o) continue;
+          if (o.ax >= a.lx - 4 && o.ax <= a.lx + a.lw + 4 && o.ay >= a.ly - 4 && o.ay <= a.ly + a.lh + 4) {
+            a.ly = Math.min(a.ly, o.ay - a.lh - gap - 4);
+            clampBox(a);
+          }
+        }
+      }
+    }
+    for (const b of boxes) {
+      const el = b.el, lead = el.querySelector(":scope > .nl-lead");
+      if (!b.vis) {
+        el.style.opacity = 0;
+        el.classList.remove("shifted");
+        if (lead) { lead.style.opacity = 0; lead.style.height = "0"; }
+        continue;
+      }
+      el.style.opacity = el.classList.contains("dim") ? .35 * b.op : b.op;
+      el.style.zIndex = String(1000 - Math.round(b.dist * 10));
+      el.style.transform = `translate3d(${b.lx.toFixed(1)}px,${b.ly.toFixed(1)}px,0) scale(${b.s.toFixed(3)})`;
+      const dx = (b.lx + b.lw / 2) - b.ax, dy = (b.ly + b.lh) - b.ay;
+      const shifted = Math.hypot(dx, dy) > 8;
+      el.classList.toggle("shifted", shifted);
+      if (lead) {
+        if (shifted) {
+          const x0 = el._lw / 2, y0 = el._lh, x1 = (b.ax - b.lx) / b.s, y1 = (b.ay - b.ly) / b.s;
+          const ddx = x1 - x0, ddy = y1 - y0, dist = Math.hypot(ddx, ddy), ang = Math.atan2(ddy, ddx) - Math.PI / 2;
+          lead.style.height = dist.toFixed(1) + "px";
+          lead.style.opacity = "1";
+          lead.style.transform = `translate(${x0.toFixed(1)}px,${y0.toFixed(1)}px) rotate(${ang.toFixed(3)}rad)`;
+        } else {
+          lead.style.opacity = "0";
+          lead.style.height = "0";
+        }
+      }
+    }
   }
 }
