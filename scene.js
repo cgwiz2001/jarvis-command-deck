@@ -7,7 +7,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { makeAvatar, animateAvatar } from "./avatars.js?v=240";
+import { makeAvatar, animateAvatar } from "./avatars.js?v=241";
 
 const NOISE = /* glsl */`
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
@@ -52,9 +52,9 @@ function detectTier(pref) {
   return "high";
 }
 const TIERS = {
-  high: { maxDpr: 2, minDpr: 1, bloomScale: .75, stars: 140, dust: 50, sphereSeg: 128, octaves: 5 },
-  mid:  { maxDpr: 1.6, minDpr: .8, bloomScale: .5, stars: 90, dust: 30, sphereSeg: 96, octaves: 4 },
-  low:  { maxDpr: 1.15, minDpr: .65, bloomScale: .35, stars: 60, dust: 18, sphereSeg: 64, octaves: 3 },
+  high: { maxDpr: 2, minDpr: 1, bloomScale: .75, stars: 90, dust: 16, sphereSeg: 128, octaves: 5 },
+  mid:  { maxDpr: 1.6, minDpr: .8, bloomScale: .5, stars: 70, dust: 10, sphereSeg: 96, octaves: 4 },
+  low:  { maxDpr: 1.15, minDpr: .65, bloomScale: .35, stars: 50, dust: 8, sphereSeg: 64, octaves: 3 },
 };
 
 function glowTexture(stops) {
@@ -152,7 +152,7 @@ export class Deck {
     const r = this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: "high-performance", alpha: false, stencil: false });
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.05; r.outputColorSpace = THREE.SRGBColorSpace;
     this.dpr = Math.min(window.devicePixelRatio || 1, this.tier.maxDpr); r.setPixelRatio(this.dpr);
-    const s = this.scene = new THREE.Scene(); s.background = new THREE.Color(0x04090f); s.fog = new THREE.FogExp2(0x08121d, .010);
+    const s = this.scene = new THREE.Scene(); s.background = new THREE.Color(0x03070d); s.fog = new THREE.FogExp2(0x06111c, .010);
     const pm = new THREE.PMREMGenerator(r); s.environment = pm.fromScene(new RoomEnvironment(), .04).texture; pm.dispose();
     s.environmentIntensity = .55;
     this.camera = new THREE.PerspectiveCamera(42, 1, .1, 1200);
@@ -177,48 +177,52 @@ export class Deck {
     this.intro(); this.last = performance.now(); this.loop = this.loop.bind(this); requestAnimationFrame(this.loop);
   }
   buildSky() {
-    const oct = this.tier.octaves;
     const m = new THREE.ShaderMaterial({ side: THREE.BackSide, depthWrite: false, uniforms: { uTime: { value: 0 } },
-      vertexShader: `varying vec3 vD; void main(){ vD=normalize(position); vec4 p=projectionMatrix*modelViewMatrix*vec4(position,1.); gl_Position=p.xyww; }`,
-      fragmentShader: NOISE + `uniform float uTime; varying vec3 vD;
-        float fbm(vec3 p){float a=.5,s=0.;for(int i=0;i<${oct};i++){s+=a*snoise(p);p*=2.03;a*=.5;}return s;}
-        float hexGrid(vec2 p){ vec2 s=vec2(1.,1.7320508); vec2 a=mod(p,s)-s*.5; vec2 b=mod(p-s*.5,s)-s*.5; vec2 h=dot(a,a)<dot(b,b)?a:b; float d=max(dot(abs(h),vec2(.8660254,.5)),abs(h.x)); return smoothstep(.02,0.,abs(d-.5)); }
+      vertexShader: `varying vec3 vD; varying vec4 vClip; void main(){ vD=normalize(position); vec4 p=projectionMatrix*modelViewMatrix*vec4(position,1.); vClip=p; gl_Position=p.xyww; }`,
+      fragmentShader: `uniform float uTime; varying vec3 vD; varying vec4 vClip;
         void main(){ vec3 d=normalize(vD);
-          float n=fbm(d*1.8+vec3(uTime*.003,0.,uTime*.002));
-          vec3 c=vec3(.016,.035,.055);
-          c+=vec3(.04,.12,.16)*max(n,0.)*.10;
-          vec2 hz=d.xz/max(abs(d.y),.18);
-          float hex=hexGrid(hz*.32);
-          c+=vec3(.22,.40,.46)*hex*smoothstep(.72,-.05,d.y)*.05;
+          float t=clamp(.5-vClip.y/max(vClip.w,1e-4)*.5,0.,1.);
+          vec3 top=vec3(.012,.027,.051);
+          vec3 upper=vec3(.024,.067,.110);
+          vec3 mid=vec3(.039,.118,.165);
+          vec3 low=vec3(.055,.227,.290);
+          vec3 glow=vec3(.122,.498,.600);
+          vec3 c=mix(top,upper,smoothstep(0.,.32,t));
+          c=mix(c,mid,smoothstep(.28,.55,t));
+          c=mix(c,low,smoothstep(.52,.80,t));
+          c=mix(c,glow,smoothstep(.74,1.,t)*.28);
           float rh=smoothstep(-.2,.95,d.x)*smoothstep(-.75,.2,d.y);
           c+=vec3(.051,.165,.212)*rh*.20;
-          c*=.94-.22*max(-d.y,0.);
           gl_FragColor=vec4(c,1.); }` });
     this.sky = new THREE.Mesh(new THREE.SphereGeometry(600, 48, 32), m); this.sky.frustumCulled = false; this.scene.add(this.sky);
   }
   buildStars() {
-    const mk = (n, rMin, rMax, sizeMin, sizeMax, palette) => {
-      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3), sz = new Float32Array(n), ph = new Float32Array(n);
+    const mk = (n, rMin, rMax, sizeMin, sizeMax, palette, sparkleChance) => {
+      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3), sz = new Float32Array(n), ph = new Float32Array(n), sp = new Float32Array(n);
       const cs = palette.map(h => new THREE.Color(h));
       for (let i = 0; i < n; i++) {
         const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, r = rMin + Math.pow(Math.random(), .6) * (rMax - rMin), q = Math.sqrt(1 - u * u);
         pos.set([r * q * Math.cos(th), r * u * .7, r * q * Math.sin(th)], i * 3);
         const c = cs[(Math.random() * cs.length) | 0]; col.set([c.r, c.g, c.b], i * 3);
         sz[i] = sizeMin + Math.pow(Math.random(), 3) * (sizeMax - sizeMin); ph[i] = Math.random() * 100;
+        sp[i] = Math.random() < sparkleChance ? 1 : 0;
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); g.setAttribute("color", new THREE.BufferAttribute(col, 3));
       g.setAttribute("size", new THREE.BufferAttribute(sz, 1)); g.setAttribute("phase", new THREE.BufferAttribute(ph, 1));
+      g.setAttribute("spark", new THREE.BufferAttribute(sp, 1));
       const m = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, uniforms: { uTime: { value: 0 }, uDpr: { value: this.dpr } },
-        vertexShader: `attribute float size; attribute float phase; attribute vec3 color; uniform float uTime; uniform float uDpr; varying vec3 vC; varying float vA;
+        vertexShader: `attribute float size; attribute float phase; attribute float spark; attribute vec3 color; uniform float uTime; uniform float uDpr; varying vec3 vC; varying float vA;
           void main(){ vec4 mv=modelViewMatrix*vec4(position,1.); gl_Position=projectionMatrix*mv;
-            float tw=.55+.45*sin(uTime*(.6+fract(phase)*1.8)+phase); vA=tw; vC=color;
-            gl_PointSize=size*uDpr*(260./-mv.z)*(.8+.4*tw); }`,
-        fragmentShader: `varying vec3 vC; varying float vA; void main(){ vec2 p=gl_PointCoord-.5; float d=length(p); float a=smoothstep(.5,.0,d); a=a*a+.6*smoothstep(.08,0.,d); gl_FragColor=vec4(vC*a*vA,a*vA); }` });
+            float breath=.78+.22*sin(uTime*.28+phase);
+            float glint=spark*pow(max(sin(uTime*.45+phase),0.),8.)*.85;
+            vA=(.55*breath+glint); vC=color;
+            gl_PointSize=size*uDpr*(200./-mv.z)*(1.+glint*.4); }`,
+        fragmentShader: `varying vec3 vC; varying float vA; void main(){ vec2 p=gl_PointCoord-.5; float d=length(p); float a=smoothstep(.5,.0,d); a=a*a; float core=smoothstep(.14,0.,d); gl_FragColor=vec4(vC*(a*vA+core*vA),a*vA+core*vA*.6); }` });
       const p = new THREE.Points(g, m); p.frustumCulled = false; return p;
     };
-    this.stars = mk(this.tier.stars, 90, 420, .5, 1.7, ["#6a8490", "#4a717d", "#5a7a86", "#3d5c68"]);
-    this.dust = mk(this.tier.dust, 8, 42, .25, .8, ["#1a2a32", "#223c47", "#2a3c44"]);
+    this.stars = mk(this.tier.stars, 90, 420, .4, 1.25, ["#9ab4c0", "#6a8490", "#7a9aa6", "#5a7a86"], .18);
+    this.dust = mk(this.tier.dust, 10, 48, .2, .45, ["#1a2a32", "#223c47"], 0);
     this.dust.material.uniforms.uDpr = this.stars.material.uniforms.uDpr;
     this.scene.add(this.stars, this.dust);
   }
@@ -227,13 +231,12 @@ export class Deck {
       uniforms: { uTime: { value: 0 }, uPulse: { value: 0 }, uPulseT: { value: -10 }, uR: { value: 8.6 } },
       vertexShader: `varying vec2 vP; void main(){ vP=position.xy; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
       fragmentShader: `uniform float uTime; uniform float uPulseT; uniform float uR; varying vec2 vP;
-        float hexGrid(vec2 p){ vec2 s=vec2(1.,1.7320508); vec2 a=mod(p,s)-s*.5; vec2 b=mod(p-s*.5,s)-s*.5; vec2 h=dot(a,a)<dot(b,b)?a:b; float d=max(dot(abs(h),vec2(.8660254,.5)),abs(h.x)); return smoothstep(.018,0.,abs(d-.5)); }
         void main(){ float r=length(vP);
           float fade=smoothstep(13.,0.,r)*(.4+.6*exp(-r*.07));
-          float hex=hexGrid(vP*.16)*.05;
+          float wash=exp(-r*.11)*.18;
           float orbit=exp(-pow((r-uR)*10.,2.))*.055 + exp(-pow((r-uR)*1.8,2.))*.015;
           float pt=uTime-uPulseT; float pulse=exp(-pow((r-pt*9.)*1.4,2.))*exp(-pt*.9)*step(0.,pt)*.55;
-          vec3 c=vec3(.30,.46,.52)*hex + vec3(.28,.58,.64)*orbit + vec3(.70,.88,.92)*pulse*.3;
+          vec3 c=vec3(.055,.20,.26)*wash + vec3(.28,.58,.64)*orbit + vec3(.70,.88,.92)*pulse*.3;
           gl_FragColor=vec4(c*fade,1.); }` });
     const f = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), m); f.rotation.x = -Math.PI / 2; f.position.y = -2.6; this.scene.add(f);
   }

@@ -1,5 +1,5 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, ROUTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=240";
+import { ROSTER, ROUTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=241";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -250,6 +250,14 @@ $("hookSave").onclick = () => {
   if (url) LS.set("jcd.hookUrl", url); else LS.del("jcd.hookUrl");
   if (key) { LS.set("jcd.hookKey", key); $("hookKey").value = ""; }
   hookStatus(); renderRouter(); renderDossier(); renderNote();
+  if (hookCfg().url || hookCfg().key) {
+    toast("Instant link saved on this device");
+    const st = $("hookState");
+    st.classList.remove("flash");
+    void st.offsetWidth;
+    st.classList.add("flash");
+    setTimeout(() => st.classList.remove("flash"), 1600);
+  }
 };
 $("hookForget").onclick = () => { LS.del("jcd.hookUrl"); LS.del("jcd.hookKey"); $("hookUrl").value = ""; $("hookKey").value = ""; hookStatus(); renderRouter(); renderDossier(); renderNote(); };
 $("qSel").onchange = e => { LS.set("jcd.quality", e.target.value); toast("Reloading with new visual quality…", 1500); setTimeout(() => location.reload(), 700); };
@@ -626,7 +634,7 @@ async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=240");
+      const { Deck } = await import("./scene.js?v=241");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
