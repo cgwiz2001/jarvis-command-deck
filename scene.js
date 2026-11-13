@@ -7,7 +7,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { makeAvatar, animateAvatar } from "./avatars.js?v=250";
+import { makeAvatar, animateAvatar } from "./avatars.js?v=251";
 
 const NOISE = /* glsl */`
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
@@ -56,6 +56,32 @@ const TIERS = {
   mid:  { maxDpr: 1.6, minDpr: .8, bloomScale: .5, stars: 70, dust: 10, sphereSeg: 96, octaves: 4 },
   low:  { maxDpr: 1.15, minDpr: .65, bloomScale: .35, stars: 50, dust: 8, sphereSeg: 64, octaves: 3 },
 };
+
+
+// Blue-noise-ish scatter: random points with a minimum distance, no grid.
+function scatterPoints(n, rMin, rMax, yScale) {
+  const out = [];
+  const vol = (4 / 3) * Math.PI * (Math.pow(rMax, 3) - Math.pow(rMin, 3)) * yScale;
+  const minD = Math.pow(vol / Math.max(n, 1), 1 / 3) * 0.52;
+  const minD2 = minD * minD;
+  for (let i = 0; i < n; i++) {
+    let x = 0, y = 0, z = 0, ok = false;
+    for (let t = 0; t < 80; t++) {
+      const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2;
+      const rr = rMin + Math.pow(Math.random(), .55) * (rMax - rMin);
+      const q = Math.sqrt(Math.max(0, 1 - u * u));
+      x = rr * q * Math.cos(th); y = rr * u * yScale; z = rr * q * Math.sin(th);
+      ok = true;
+      for (let j = 0; j < out.length; j += 3) {
+        const dx = x - out[j], dy = y - out[j + 1], dz = z - out[j + 2];
+        if (dx * dx + dy * dy + dz * dz < minD2) { ok = false; break; }
+      }
+      if (ok) break;
+    }
+    if (ok) out.push(x, y, z);
+  }
+  return out;
+}
 
 function glowTexture(stops) {
   const c = document.createElement("canvas"); c.width = c.height = 256;
@@ -143,6 +169,7 @@ export class Deck {
   constructor(canvas, labelsEl, roster, opts = {}) {
     this.canvas = canvas; this.labelsEl = labelsEl; this.roster = roster; this.opts = opts;
     this.tierName = detectTier(opts.quality); this.tier = TIERS[this.tierName];
+    if (labelsEl) { labelsEl.classList.remove("q-high", "q-mid", "q-low"); labelsEl.classList.add("q-" + this.tierName); }
     this.reduced = !!opts.reduced; this.tweens = []; this.beams = []; this.links = new Map(); this.flares = [];
     this.hover = null; this.selected = null; this.onSelect = opts.onSelect || (() => {}); this.onHover = opts.onHover || (() => {});
     this.t0 = performance.now(); this.lastInteract = -1e9; this.fpsAcc = []; this.dprTimer = 0;
@@ -198,11 +225,10 @@ export class Deck {
   }
   buildStars() {
     const mk = (n, rMin, rMax, sizeMin, sizeMax, palette, sparkleChance) => {
-      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3), sz = new Float32Array(n), ph = new Float32Array(n), sp = new Float32Array(n);
+      const pts = scatterPoints(n, rMin, rMax, .7), count = pts.length / 3;
+      const pos = new Float32Array(pts), col = new Float32Array(count * 3), sz = new Float32Array(count), ph = new Float32Array(count), sp = new Float32Array(count);
       const cs = palette.map(h => new THREE.Color(h));
-      for (let i = 0; i < n; i++) {
-        const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, r = rMin + Math.pow(Math.random(), .6) * (rMax - rMin), q = Math.sqrt(1 - u * u);
-        pos.set([r * q * Math.cos(th), r * u * .7, r * q * Math.sin(th)], i * 3);
+      for (let i = 0; i < count; i++) {
         const c = cs[(Math.random() * cs.length) | 0]; col.set([c.r, c.g, c.b], i * 3);
         sz[i] = sizeMin + Math.pow(Math.random(), 3) * (sizeMax - sizeMin); ph[i] = Math.random() * 100;
         sp[i] = Math.random() < sparkleChance ? 1 : 0;
@@ -221,7 +247,7 @@ export class Deck {
         fragmentShader: `varying vec3 vC; varying float vA; void main(){ vec2 p=gl_PointCoord-.5; float d=length(p); float a=smoothstep(.5,.0,d); a=a*a; float core=smoothstep(.14,0.,d); gl_FragColor=vec4(vC*(a*vA+core*vA),a*vA+core*vA*.6); }` });
       const p = new THREE.Points(g, m); p.frustumCulled = false; return p;
     };
-    this.stars = mk(this.tier.stars, 90, 420, .4, 1.25, ["#9ab4c0", "#6a8490", "#7a9aa6", "#5a7a86"], .18);
+    this.stars = mk(this.tier.stars, 90, 420, .35, 1.05, ["#8aa4b0", "#5a7480", "#6a8a96", "#4a6a76"], .12);
     this.dust = mk(this.tier.dust, 10, 48, .2, .45, ["#1a2a32", "#223c47"], 0);
     this.dust.material.uniforms.uDpr = this.stars.material.uniforms.uDpr;
     this.scene.add(this.stars, this.dust);

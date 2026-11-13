@@ -151,12 +151,19 @@ body.ready #cmd{transform:translate(-50%,0)}
 .mic.rec svg{stroke:#ff8a9b}
 @keyframes ping{70%{box-shadow:0 0 0 12px rgba(255,77,106,0)}100%{box-shadow:0 0 0 0 rgba(255,77,106,0)}}
 .cmdnote{font:11px Inter,sans-serif;color:#8aa0a8;padding:2px 4px 4px 2px;text-shadow:0 1px 8px rgba(3,7,13,.85)}
-/* labels */
-.nl{position:absolute;left:0;top:0;transform:translate(-50%,-100%);pointer-events:auto;cursor:pointer;white-space:nowrap;text-align:center;transition:opacity .5s var(--ease)}
-.nl .n{font:700 12px Orbitron,sans-serif;letter-spacing:.2em;color:#fff;text-shadow:0 0 10px var(--c),0 0 2px #000;display:inline-flex;align-items:center;gap:6px}
+/* labels — slightly frosted glass pills */
+.nl{position:absolute;left:0;top:0;transform:translate(-50%,-100%);pointer-events:auto;cursor:pointer;white-space:nowrap;text-align:center;transition:opacity .5s var(--ease);
+  padding:5px 10px 4px;border-radius:14px;
+  background:linear-gradient(155deg,rgba(12,28,40,.70),rgba(4,9,15,.68));
+  border:1px solid rgba(95,212,232,.20);
+  box-shadow:0 8px 18px -10px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.08),0 0 0 1px rgba(42,157,244,.08);
+  -webkit-backdrop-filter:blur(4px) saturate(130%);backdrop-filter:blur(4px) saturate(130%)}
+#labels.q-mid .nl,#labels.q-low .nl{-webkit-backdrop-filter:none;backdrop-filter:none;
+  background:linear-gradient(155deg,rgba(12,28,40,.78),rgba(4,9,15,.76))}
+.nl .n{font:700 12px Orbitron,sans-serif;letter-spacing:.2em;color:#fff;text-shadow:0 0 8px var(--c),0 0 1px #000;display:inline-flex;align-items:center;gap:6px}
 .nl .n i{width:6px;height:6px;border-radius:50%;background:#4a717d}
 .nl.working .n i{background:#eef7ff;box-shadow:0 0 8px #5fd4e8}.nl.waiting .n i{background:var(--wait);box-shadow:0 0 8px var(--wait)}
-.nl .r{font:500 10px "JetBrains Mono",monospace;letter-spacing:.08em;color:color-mix(in srgb,var(--c) 60%,#cbd5e1);opacity:.75;margin-top:2px;text-transform:uppercase}
+.nl .r{font:500 10px "JetBrains Mono",monospace;letter-spacing:.08em;color:color-mix(in srgb,var(--c) 60%,#cbd5e1);opacity:.88;margin-top:2px;text-transform:uppercase}
 .nl.hov .n,.nl.sel .n{color:var(--c)} .nl.dim{opacity:.35}
 .nl.core .n{font-size:13px;letter-spacing:.34em}
 /* toasts */
