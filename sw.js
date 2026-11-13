@@ -1,15 +1,15 @@
 // Jarvis Command Deck service worker. Cache name is versioned with the app.
-const VERSION = "2.6.0";
+const VERSION = "2.6.1";
 const CACHE = "jcd-" + VERSION;
 const PRECACHE = [
   "./",
   "index.html",
-  "style.css?v=260",
-  "lock.js?v=260",
-  "app.js?v=260",
-  "config.js?v=260",
-  "scene.js?v=260",
-  "avatars.js?v=260",
+  "style.css?v=261",
+  "lock.js?v=261",
+  "app.js?v=261",
+  "config.js?v=261",
+  "scene.js?v=261",
+  "avatars.js?v=261",
   "manifest.webmanifest",
   "icon-192.png",
   "icon-512.png",

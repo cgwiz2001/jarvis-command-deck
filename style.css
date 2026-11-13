@@ -18,10 +18,6 @@ button{cursor:pointer}
   box-shadow:0 20px 60px -20px rgba(0,0,0,.75),inset 0 1px 0 rgba(255,255,255,.07),0 0 0 1px rgba(95,212,232,.08);border-radius:var(--r)}
 .glass-strip{-webkit-backdrop-filter:blur(14px) saturate(140%);backdrop-filter:blur(14px) saturate(140%)}
 .muted{color:var(--mute)}
-#hookState{border-radius:8px;padding:6px 8px;margin:0 -8px 8px;transition:background .35s,color .35s,box-shadow .35s}
-#hookState.flash{animation:hookflash 1.5s ease;color:#d7eef4;background:rgba(95,212,232,.16);box-shadow:0 0 0 1px rgba(95,212,232,.35),0 0 18px -4px rgba(95,212,232,.45)}
-@keyframes hookflash{0%{background:rgba(95,212,232,.28);box-shadow:0 0 0 1px rgba(95,212,232,.55),0 0 22px -2px rgba(95,212,232,.65)}100%{background:transparent;box-shadow:none;color:var(--mute)}}
-.hook-note{font-size:12px;line-height:1.45;margin:.7rem 0 0;opacity:.88}
 /* boot */
 #boot{position:fixed;inset:0;z-index:50;display:grid;place-content:center;justify-items:center;gap:18px;background:linear-gradient(180deg,#020611 0%,#03081a 36%,#072436 70%,#0e3a4a 100%);transition:opacity 1.1s var(--ease),visibility 1.1s}
 #boot::before{content:"";position:absolute;inset:0;pointer-events:none;opacity:.9;background-image:radial-gradient(1px 1px at 22% 28%,rgba(148,180,196,.18) 50%,transparent 51%),radial-gradient(1px 1px at 78% 18%,rgba(95,212,232,.12) 50%,transparent 51%),radial-gradient(1px 1px at 60% 72%,rgba(148,180,196,.12) 50%,transparent 51%),radial-gradient(ellipse at 85% 45%,rgba(13,42,54,.45),transparent 60%);background-size:auto}

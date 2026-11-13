@@ -193,7 +193,7 @@ async function accept() {
   unlockWaiters.splice(0).forEach(fn => fn());
   if (!started) {
     started = true;
-    app = await import("./app.js?v=260");
+    app = await import("./app.js?v=261");
     await app.boot();
   } else if (app && app.resumeDeck) {
     app.resumeDeck();
@@ -413,6 +413,7 @@ function registerPwa() {
 }
 
 function start() {
+  try { localStorage.removeItem("jcd.hookUrl"); localStorage.removeItem("jcd.hookKey"); } catch {}
   registerPwa();
   wire();
   if (!hasPin()) {
