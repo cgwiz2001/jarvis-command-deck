@@ -21,6 +21,43 @@ function token() { return LS.get("jcd.tok") || LS.get("jarvis.sbtok") || ""; }
 function tokenSource() { return LS.get("jcd.tok") ? "deck" : (LS.get("jarvis.sbtok") ? "hud" : ""); }
 const okBase = b => /^https:\/\/[^\s/]+\/.+/.test(b);
 
+function hookCfg() { return { url: (LS.get("jcd.hookUrl") || "").trim(), key: (LS.get("jcd.hookKey") || "").trim() }; }
+function hookReady() { const h = hookCfg(); return /^https:\/\//i.test(h.url) && !!h.key; }
+function hookStatus() {
+  const el = $("hookState"); if (!el) return; const h = hookCfg();
+  if (hookReady()) el.textContent = "Instant routing is on. The key is saved on this device (hidden).";
+  else if (h.url || h.key) el.textContent = "Saved on this device, but both the URL and the key are needed.";
+  else el.textContent = "Not set. Paste the routine's webhook URL and sender key to pass jobs to the crew at once.";
+}
+async function pingRouter(item) {
+  if (!hookReady()) return "unset";
+  const h = hookCfg(), ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const r = await fetch(h.url, { method: "POST", signal: ctl.signal,
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + h.key, "X-Webhook-Key": h.key },
+      body: JSON.stringify({ event: "inbox-new", id: item && item.id, routedTo: (item && item.routedTo) || null }) });
+    return r.ok ? "ok" : "failed";
+  } catch { return "failed"; }
+  finally { clearTimeout(to); }
+}
+function instantLine(name, instant) {
+  if (instant === "ok") return name ? (name + " has it now.") : "It's being routed now.";
+  if (instant === "failed") return "It's queued, but the instant link failed.";
+  return "queued; add the instant link in Settings.";
+}
+function routeChip(m) {
+  const r = m.route; if (!r) return "";
+  const who = r.i > 0 ? "→ " + chip(r.i) + " " : "";
+  let label = "not queued";
+  if (r.ok) {
+    if (r.instant === "ok") label = r.i > 0 ? "sent to " + ROSTER[r.i].name + " now" : "sent now";
+    else if (r.instant === "failed") label = "instant link failed";
+    else label = "queued, instant link not set";
+  }
+  return `<div class="rt">${who}<span>${label}</span></div>`;
+}
+
+
 function noteUrl(id) { const c = conn(); return `${c.base}/context-sets/${encodeURIComponent(c.set)}/notes/${encodeURIComponent(id)}`; }
 async function sbGet(id) {
   const t = token(), c = conn(); if (!t) throw new Error("no token"); if (!okBase(c.base) || !c.set || !id) throw new Error("connection details missing");
@@ -59,16 +96,6 @@ const stateLabel = s => ({ working: "Working", waiting: "Waiting", idle: "Idle",
 const TZ = ROUTER.tz;
 const fmtTime = iso => { if (!iso) return ""; const d = new Date(iso); if (isNaN(d)) return ""; return d.toLocaleString("en-GB", { timeZone: TZ, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }); };
 function ago(iso) { const s = (Date.now() - new Date(iso)) / 1000; if (!isFinite(s)) return ""; if (s < 60) return "just now"; if (s < 3600) return Math.round(s / 60) + "m ago"; if (s < 86400) return Math.round(s / 3600) + "h ago"; return Math.round(s / 86400) + "d ago"; }
-function wall(d) { const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short" }).formatToParts(d).map(x => [x.type, x.value]));
-  return { ms: Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute), dow: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(p.weekday) }; }
-function nextRouter() {
-  const now = wall(new Date()); const day0 = now.ms - (now.ms % 86400000);
-  for (let d = 0; d < 9; d++) { const dow = (now.dow + d) % 7; if (!ROUTER.days.includes(dow)) continue;
-    for (const h of ROUTER.hours) { const ms = day0 + d * 86400000 + h * 3600000; if (ms > now.ms) { const mins = Math.round((ms - now.ms) / 60000);
-      const dn = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dow]; return { mins, label: (d === 0 ? "today" : d === 1 ? "tomorrow" : dn) + " " + String(h).padStart(2, "0") + ":00" }; } } }
-  return null;
-}
-const dur = m => m < 60 ? m + "m" : Math.floor(m / 60) + "h " + String(m % 60).padStart(2, "0") + "m";
 
 // ---------- state ----------
 const S = { inbox: [], bots: [], botByIdx: {}, at: 0, err: null, polling: false, selected: null, firstPoll: true, freshIds: new Set() };
@@ -144,19 +171,19 @@ function renderCrew() {
     return `<div class="crow ${S.selected === i ? "sel" : ""}" data-sel="${i}" style="--c:${b.color}"><div class="orb"></div><div><div class="nm">${esc(b.name)}</div><div class="rl">${esc(b.title)}</div></div><span class="st stt ${st}">${stateLabel(st)}</span></div>`; }).join("");
 }
 function renderRouter() {
-  const n = nextRouter();
-  $("routerInfo").innerHTML = `ROUTER · 4× weekdays${n ? ` · next pass <b>${esc(n.label)}</b> (in ${dur(n.mins)})` : ""}<br>Direct chat with Jarvis routes straight away.`;
+  $("routerInfo").innerHTML = hookReady()
+    ? "INSTANT ROUTING · jobs go to the crew as soon as they're queued"
+    : `INSTANT ROUTING · not set · <a href="#" data-open="settings">add the instant link in Settings</a>`;
 }
 function renderDossier() {
   const i = S.selected, el = $("dossier"), panel = $("right");
   if (i == null) { panel.classList.remove("open"); return; }
   const b = ROSTER[i], s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown";
   const reqs = S.inbox.filter(r => botIndex(r.routedTo) === i).slice().reverse().slice(0, 5);
-  const n = nextRouter();
   el.innerHTML = `<div class="dh" style="--c:${b.color}"><div class="orb"></div><div><h3>${esc(b.name.toUpperCase())}</h3><p>${esc(b.title)}</p></div></div>
     <span class="stt ${st}">${stateLabel(st)}</span>
     <div class="dbox"><h5>Live status line</h5><div class="ln">${s ? esc(s.note || "—") : (token() ? "No status line for this bot in Second Brain yet." : "Link Second Brain in Settings to see live status.")}</div>${s && s.updatedAt ? `<div class="sm">Updated ${esc(fmtTime(s.updatedAt))}</div>` : ""}</div>
-    ${i === 0 ? `<div class="dbox"><h5>Routing</h5><div class="ln">Every message you send here lands in Jarvis's inbox. The router hands it to the right bot 4× each weekday${n ? `; next pass ${esc(n.label)} (in ${dur(n.mins)})` : ""}. Talking to Jarvis directly routes it straight away.</div></div>`
+    ${i === 0 ? `<div class="dbox"><h5>Routing</h5><div class="ln">Every message you send here lands in Jarvis's inbox. With the instant link in Settings, it's passed to the right bot straight away. Without it, the request is queued until the link is added.</div></div>`
       : `<div class="dbox"><h5>Recent requests via Jarvis</h5>${reqs.length ? reqs.map(r => `<div class="mini">${esc(r.text)}<div class="sm">${esc(r.status)} · ${esc(ago(r.createdAt))}</div></div>`).join("") : `<div class="ln muted">None yet.</div>`}</div>`}
     <button class="btn dact" id="briefBtn">${i === 0 ? "Brief Jarvis" : "Ask Jarvis to brief " + esc(b.name)}</button>`;
   panel.classList.add("open");
@@ -189,6 +216,7 @@ function openSettings() {
   $("tokIn").value = ""; $("cBase").value = c.base; $("cSet").value = c.set; $("cInbox").value = c.inbox; $("cStatus").value = c.status; $("cHist").value = c.hist; $("cStyle").value = c.style; settingsVoice();
   $("connState").textContent = c.fromHud ? "Filled in from the Jarvis HUD on this device." : (c.base ? "Saved on this device." : "Enter the API base, context set and the two note ids.");
   $("connDet").open = !c.base; $("qSel").value = LS.get("jcd.quality") || "auto"; $("motionChk").checked = LS.get("jcd.reduced") === "1";
+  $("hookUrl").value = hookCfg().url; $("hookKey").value = ""; hookStatus();
   $("verTag").textContent = "Command Deck v" + VERSION + (deck ? " · render tier " + deck.tierName : "");
   $("settings").hidden = false;
 }
@@ -199,6 +227,14 @@ $("tokForget").onclick = () => { LS.del("jcd.tok"); $("tokState").textContent = 
 $("connSave").onclick = () => { const o = { base: $("cBase").value.trim(), set: $("cSet").value.trim(), inbox: $("cInbox").value.trim(), status: $("cStatus").value.trim(), hist: $("cHist").value.trim(), style: $("cStyle").value.trim() }; D.style = null;
   if (o.base && !okBase(o.base)) { $("connState").textContent = "API base must be an https:// URL."; return; } LS.set("jcd.conn", JSON.stringify(o)); $("connState").textContent = "Saved on this device."; poll(); };
 $("connTest").onclick = async () => { $("connState").textContent = "Testing…"; try { const c = conn(); await sbGet(c.status); await sbGet(c.inbox); $("connState").textContent = "Link OK: both notes readable."; } catch (e) { $("connState").textContent = "Link failed: " + e.message; } };
+$("hookSave").onclick = () => {
+  const url = $("hookUrl").value.trim(), key = $("hookKey").value.trim();
+  if (url && !/^https:\/\//i.test(url)) { $("hookState").textContent = "Webhook URL must be an https:// URL."; return; }
+  if (url) LS.set("jcd.hookUrl", url); else LS.del("jcd.hookUrl");
+  if (key) { LS.set("jcd.hookKey", key); $("hookKey").value = ""; }
+  hookStatus(); renderRouter(); renderDossier(); renderNote();
+};
+$("hookForget").onclick = () => { LS.del("jcd.hookUrl"); LS.del("jcd.hookKey"); $("hookUrl").value = ""; $("hookKey").value = ""; hookStatus(); renderRouter(); renderDossier(); renderNote(); };
 $("qSel").onchange = e => { LS.set("jcd.quality", e.target.value); toast("Reloading with new visual quality…", 1500); setTimeout(() => location.reload(), 700); };
 $("motionChk").onchange = e => { LS.set("jcd.reduced", e.target.checked ? "1" : "0"); setTimeout(() => location.reload(), 300); };
 document.addEventListener("keydown", e => { if (e.key === "Escape") { if (!$("settings").hidden) $("settings").hidden = true; else if (S.selected != null) select(null); else closeLeft(); } if (e.key === "/" && document.activeElement !== $("cmdIn") && $("settings").hidden) { e.preventDefault(); $("cmdIn").focus(); } });
@@ -222,7 +258,7 @@ function addMsg(who, text, extra) { const m = Object.assign({ id: rid(), who, te
 // ----- dialogue rendering -----
 function bubble(m) {
   if (m.who === "sys") return `<div class="bub sys">${esc(m.text)}</div>`;
-  const me = m.who === "me", rt = m.route && m.route.i > 0 ? `<div class="rt">→ ${chip(m.route.i)} <span>${m.route.ok ? "queued in inbox" : "not queued"}</span></div>` : "";
+  const me = m.who === "me", rt = routeChip(m);
   return `<div class="bub ${me ? "me" : "jv"}"><span class="who">${me ? "Commander" : "Jarvis"}</span>${esc(m.text)}${rt}</div>`;
 }
 const liveBubbles = () => (D.interim ? `<div class="bub me interim"><span class="who">Commander · live</span>${esc(D.interim)}</div>` : "") +
@@ -253,9 +289,9 @@ function renderNote() {
   const n = $("cmdNote"); n.classList.remove("mood");
   const lbl = { listening: "● Listening…", thinking: "◆ Jarvis is thinking…", speaking: "◉ Jarvis is speaking · tap mic to interrupt" }[D.mode];
   if (lbl) { n.classList.add("mood"); n.textContent = lbl + (D.talk ? "  ·  Talk mode on" : ""); return; }
-  const r = nextRouter(), rt = r ? ` (next ${esc(r.label)})` : "";
-  n.innerHTML = xkey() ? `Jarvis replies instantly.<span class="long"> Jobs for the crew go to Jarvis's inbox; the router hands them on 4× each weekday${rt}, or straight away when you chat to Jarvis directly.</span><span class="short"> Crew jobs: router 4× weekdays${rt}, or direct chat.</span>`
-    : `<b>No xAI key</b>: messages go to Jarvis's inbox (router 4× each weekday${rt}). <a href="#" data-open="settings" style="color:#c4b5fd">Add a key</a> for instant replies.`;
+  n.innerHTML = xkey()
+    ? `Jarvis replies instantly.<span class="long"> Jobs for the crew go to Jarvis's inbox and are passed on at once if the instant link is set in Settings.</span><span class="short"> Crew jobs: passed on instantly if the link is set.</span>`
+    : `<b>No xAI key</b>: messages go to Jarvis's inbox; add the instant link in Settings so they're passed on at once. <a href="#" data-open="settings" style="color:#c4b5fd">Add a key</a> for instant replies.`;
 }
 function setMode(m) {
   D.mode = m || null; ["listening", "thinking", "speaking"].forEach(k => document.body.classList.toggle("m-" + k, D.mode === k));
@@ -278,7 +314,7 @@ async function systemPrompt() {
   return (style ? "Your own Voice & Style notes (follow them):\n" + style + "\n\n" : "You are Jarvis, the user's chief of staff: calm, British, short and precise, with a little dry humour.\n\n") +
 `You are speaking through the Jarvis Command Deck, a live voice link. It is a HUD surface, so use the user's name only when it adds something.
 Reply in one to three short spoken sentences: plain natural speech with contractions, no markdown, lists, symbols, emoji or URLs.
-You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, route it: the deck adds it to your Second Brain inbox addressed to that bot. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a routed job is done or started; say you've passed it on or queued it. If your spoken reply says you are passing, routing, sending or handing a job to a crew member, route MUST be a non-null object with that bot's exact crew name and a task brief. Never say you have passed a job on unless route is set. Do not mention router timing; the deck adds that.
+You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, route it: the deck adds it to your Second Brain inbox addressed to that bot. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a routed job is done or started; say you've passed it on or queued it. If your spoken reply says you are passing, routing, sending or handing a job to a crew member, route MUST be a non-null object with that bot's exact crew name and a task brief. Never say you have passed a job on unless route is set. Do not say when the bot will pick it up; the deck adds that.
 Crew (name: role · live status snapshot, may be out of date):
 ${crewBrief()}
 Current date and time: ${now} (Europe/London).
@@ -354,13 +390,14 @@ async function converse(text, spoken) {
   convBusy = true; $("sendBtn").disabled = true; addMsg("me", text);
   const speakIt = spoken || pref("speakTyped", true);
   try {
-    if (!xkey()) { // fallback: queue for the router, no instant reply
-      let reply;
+    if (!xkey()) { // fallback: queue in the inbox (and ping instant routing if set)
+      let reply, route = null;
       if (!token()) reply = "I can't reply instantly without an xAI key, and Second Brain isn't linked either. Add both in Settings.";
-      else { try { const item = await sbAppend(text); markSent(item); deck && deck.intake(); const n = nextRouter();
-          reply = `No instant replies without an xAI key, so I've added that to my inbox. The router picks it up${n ? " " + n.label : " on its next run"}, or straight away if you chat to me directly.`; poll(); }
+      else { try { const item = await sbAppend(text); markSent(item); deck && deck.intake();
+          const instant = await pingRouter(item); route = { i: -1, ok: true, instant };
+          reply = "No instant replies without an xAI key, so I've added that to my inbox. " + instantLine(null, instant); poll(); }
         catch (e) { reply = "I couldn't add that to my inbox just now (" + e.message + ")."; } }
-      addMsg("jv", reply); if (speakIt) speak(reply); else setMode(null); return;
+      addMsg("jv", reply, route ? { route } : null); if (speakIt) speak(reply); else setMode(null); return;
     }
     D.thinking = true; setMode("thinking"); renderDialog();
     let res; try { res = await askJarvis(text); }
@@ -372,8 +409,8 @@ async function converse(text, spoken) {
     if (res.route) {
       const i = res.route.i, name = ROSTER[i].name; deck && deck.fire(i, "out"); route = { i, ok: false };
       if (!token()) reply += ` Second Brain isn't linked on this device, so ${name} hasn't got it yet.`;
-      else try { const item = await sbAppend(res.route.task || text, name); markSent(item); route.ok = true; route.id = item.id; const n = nextRouter();
-          reply += ` ${name} picks it up on the next router run${n ? ", " + n.label : ""}, or sooner if you chat to me directly.`; poll(); }
+      else try { const item = await sbAppend(res.route.task || text, name); markSent(item); route.ok = true; route.id = item.id;
+          route.instant = await pingRouter(item); reply += " " + instantLine(name, route.instant); poll(); }
         catch (e) { reply += ` I couldn't add it to my inbox just now, so ${name} hasn't got it yet.`; }
     }
     D.hist.push({ role: "user", content: text }, { role: "assistant", content: reply }); D.hist = D.hist.slice(-12);

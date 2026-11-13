@@ -90,6 +90,13 @@
       </details>
     </section>
     <section>
+      <h4>Instant routing</h4>
+      <p class="muted" id="hookState"></p>
+      <label>Webhook URL<input id="hookUrl" type="url" spellcheck="false" placeholder="https://… (stored only in this browser)"></label>
+      <label>Webhook key<input id="hookKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste key (stored only in this browser)"></label>
+      <div class="row"><button id="hookSave" class="btn">Save</button><button id="hookForget" class="btn ghost">Forget</button></div>
+    </section>
+    <section>
       <h4>Voice &amp; instant replies</h4>
       <p class="muted" id="xkState"></p>
       <label>xAI API key (for Jarvis's instant replies)<input id="xkIn" type="password" autocomplete="off" spellcheck="false" placeholder="Paste key (stored only in this browser)"></label>
@@ -109,7 +116,7 @@
     </section>
     <section>
       <h4>How this works</h4>
-      <p class="muted">You only talk to Jarvis. With an xAI key, Jarvis answers instantly (spoken in Talk mode) and, when a job belongs to a specialist, adds it to Jarvis's inbox in Second Brain for that bot. Without a key, messages are simply added to the inbox. Jarvis's router checks the inbox 4× each weekday (00:00, 06:00, 12:00, 18:00 UK time) and hands each request to the right bot; it also happens straight away when you talk to Jarvis directly. This deck checks for updates every 45 seconds and fires a beam when a request is routed or answered.</p>
+      <p class="muted">You only talk to Jarvis. With an xAI key, Jarvis answers instantly (spoken in Talk mode) and, when a job belongs to a specialist, adds it to Jarvis's inbox in Second Brain for that bot. Without a key, messages are simply added to the inbox. If the instant routing webhook is set in Settings, the deck pings it so the job is handed to the right bot at once. Without that link, the request stays queued until you add it. This deck checks for updates every 45 seconds and fires a beam when a request is routed or answered.</p>
       <p class="muted" id="verTag"></p>
     </section>
   </div>

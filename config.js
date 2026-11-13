@@ -18,7 +18,7 @@ export const ROSTER = [
   { id: "amelia",    name: "Amelia",    title: "PC Performance & Health Check Manager", color: "#fb923c", avatar: "blob",    glyph: "pulse",     match: ["amelia", "pc health"] },
 ];
 
-// When Jarvis's inbox router runs (wall-clock in ROUTER.tz). Days: 0=Sun … 6=Sat.
+// Display timezone for times shown in the deck. (days/hours unused by the UI; routing is instant via the Settings webhook.)
 export const ROUTER = { tz: "Europe/London", days: [1, 2, 3, 4, 5], hours: [0, 6, 12, 18] };
 
 // Live polling interval (ms) and the label sent as X-Second-Brain-Agent on writes.
