@@ -63,12 +63,12 @@ function glowTexture(stops) {
   stops.forEach(([o, col]) => gr.addColorStop(o, col)); g.fillStyle = gr; g.fillRect(0, 0, 256, 256);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
-function dashRingTexture(segments, fill) {
+function dashRingTexture(segments, fill, thin) {
   const c = document.createElement("canvas"); c.width = c.height = 512; const g = c.getContext("2d");
   g.translate(256, 256); g.strokeStyle = "#fff"; g.lineCap = "round";
   for (let i = 0; i < segments; i++) {
     const a0 = i / segments * Math.PI * 2, a1 = a0 + (Math.PI * 2 / segments) * fill;
-    g.lineWidth = i % 4 === 0 ? 10 : 5; g.beginPath(); g.arc(0, 0, 230, a0, a1); g.stroke();
+    g.lineWidth = thin ? (i % 4 === 0 ? 5 : 2.5) : (i % 4 === 0 ? 10 : 5); g.beginPath(); g.arc(0, 0, 230, a0, a1); g.stroke();
   }
   g.lineWidth = 2; g.globalAlpha = .5; g.beginPath(); g.arc(0, 0, 205, 0, Math.PI * 2); g.stroke();
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
@@ -165,7 +165,7 @@ export class Deck {
     c.addEventListener("start", () => { this.lastInteract = performance.now(); this.userDriving = true; });
     c.addEventListener("end", () => { this.lastInteract = performance.now(); this.userDriving = false; });
     this.glowTex = glowTexture([[0, "rgba(255,255,255,1)"], [.18, "rgba(255,255,255,.55)"], [.45, "rgba(255,255,255,.12)"], [1, "rgba(255,255,255,0)"]]);
-    this.ringTex = dashRingTexture(48, .55);
+    this.ringTex = dashRingTexture(48, .55); this.ringTexThin = dashRingTexture(48, .55, true);
     s.add(new THREE.HemisphereLight(0x6d5dfc, 0x05060b, .5));
     const k1 = new THREE.DirectionalLight(0xa78bfa, 1.4); k1.position.set(-8, 10, 6); s.add(k1);
     const k2 = new THREE.DirectionalLight(0x60a5fa, .8); k2.position.set(9, 3, -8); s.add(k2);
@@ -225,15 +225,15 @@ export class Deck {
       fragmentShader: `uniform float uTime; uniform float uPulseT; uniform float uR; varying vec2 vP;
         float ln(float x,float w){ float f=abs(fract(x)-.5); return smoothstep(w,0.,.5-f); }
         void main(){ float r=length(vP); float a=atan(vP.y,vP.x);
-          float fade=exp(-r*.085)*smoothstep(0.,1.2,r);
-          float rings=ln(r*.5,.04)*.55; float spokes=ln(a/6.28318*24.,.06*clamp(r*.06,.3,1.))*.25*smoothstep(1.5,4.,r);
-          float fine=ln(r*2.,.06)*.12;
-          float orbit=exp(-pow((r-uR)*7.,2.))*.55 + exp(-pow((r-uR)*1.6,2.))*.08;
-          float sweepA=mod(a-uTime*.35,6.28318); float sweep=exp(-sweepA*2.2)*.38*smoothstep(1.,3.,r)*(1.-smoothstep(14.,20.,r));
+          float fade=exp(-r*.14)*smoothstep(0.,1.2,r)*(1.-smoothstep(7.5,12.,r));
+          float rings=ln(r*.25,.022)*.2; float spokes=ln(a/6.28318*12.,.03*clamp(r*.06,.3,1.))*.09*smoothstep(1.5,4.,r);
+          float fine=0.;
+          float orbit=exp(-pow((r-uR)*12.,2.))*.2 + exp(-pow((r-uR)*1.8,2.))*.03;
+          float sweepA=mod(a-uTime*.16,6.28318); float sweep=exp(-sweepA*2.6)*.12*smoothstep(1.,3.,r)*(1.-smoothstep(8.,11.,r));
           float pt=uTime-uPulseT; float pulse=exp(-pow((r-pt*9.)*1.4,2.))*exp(-pt*.9)*step(0.,pt)*1.8;
-          vec3 c=vec3(.26,.24,.75)*(rings+spokes+fine)+vec3(.55,.36,1.)*orbit+vec3(.42,.3,1.)*sweep*(.4+rings*2.)+vec3(.85,.6,1.)*pulse;
+          vec3 c=vec3(.26,.24,.75)*(rings+spokes+fine)+vec3(.55,.36,1.)*orbit+vec3(.42,.3,1.)*sweep*(.4+rings*2.)+vec3(.85,.6,1.)*pulse*.6;
           gl_FragColor=vec4(c*fade,1.); }` });
-    const f = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), m); f.rotation.x = -Math.PI / 2; f.position.y = -2.6; this.scene.add(f);
+    const f = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), m); f.rotation.x = -Math.PI / 2; f.position.y = -2.6; this.scene.add(f);
   }
   buildCore() {
     const g = this.core = new THREE.Group(); this.scene.add(g);
@@ -272,7 +272,7 @@ export class Deck {
       bead.scale.setScalar(.6); bead.position.x = rad; m.add(bead);
     }
     // instanced tick ring
-    const ticks = 140, tg = new THREE.BoxGeometry(.03, .22, .03), tm = new THREE.MeshBasicMaterial({ color: 0xa78bfa, transparent: true, opacity: .55, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false });
+    const ticks = 140, tg = new THREE.BoxGeometry(.018, .16, .018), tm = new THREE.MeshBasicMaterial({ color: 0xa78bfa, transparent: true, opacity: .22, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false });
     const ti = this.ticks = new THREE.InstancedMesh(tg, tm, ticks); const d = new THREE.Object3D();
     for (let i = 0; i < ticks; i++) { const a = i / ticks * Math.PI * 2; d.position.set(Math.cos(a) * 4.1, 0, Math.sin(a) * 4.1); d.rotation.set(0, -a, 0); d.scale.y = i % 10 === 0 ? 2.4 : (i % 5 === 0 ? 1.5 : 1); d.updateMatrix(); ti.setMatrixAt(i, d.matrix); }
     ti.position.y = -1.9; g.add(ti);
@@ -283,7 +283,7 @@ export class Deck {
     this.motes = new THREE.Points(mg, new THREE.PointsMaterial({ size: .07, map: this.glowTex, color: 0xc4b5fd, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, toneMapped: false }));
     g.add(this.motes);
     // shockwave pool
-    this.shockMat = () => new THREE.MeshBasicMaterial({ map: this.ringTex, color: 0xc084fc, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+    this.shockMat = thin => new THREE.MeshBasicMaterial({ map: thin ? this.ringTexThin : this.ringTex, color: 0xc084fc, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
     // core hit target + label
     const hit = new THREE.Mesh(new THREE.SphereGeometry(2.3, 12, 12), new THREE.MeshBasicMaterial({ visible: false })); hit.userData.idx = 0; g.add(hit);
     this.hits = [hit];
@@ -302,14 +302,14 @@ export class Deck {
     const crew = this.roster.slice(1), N = crew.length;
     this.orbitR = 8.6;
     const pts = []; for (let i = 0; i <= 256; i++) { const a = i / 256 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * this.orbitR, 0, Math.sin(a) * this.orbitR)); }
-    this.orbitLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x8b5cf6, transparent: true, opacity: .35, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.orbitLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x8b5cf6, transparent: true, opacity: .13, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.orbitPlane = new THREE.Group(); this.orbitPlane.rotation.set(.06, 0, -.05); this.orbitPlane.add(this.orbitLine); this.scene.add(this.orbitPlane);
     crew.forEach((bot, k) => {
       const col = new THREE.Color(bot.color), grp = new THREE.Group();
       const av = makeAvatar(bot, { quality: this.tierName, glowTex: this.glowTex }); grp.add(av.head); grp.add(av.badge); const mesh = av.head, mat = av.mat, wire = null;
       const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: col, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false }));
       halo.scale.setScalar(3.6); halo.position.z = -.35; grp.add(halo);
-      const ring = new THREE.Mesh(new THREE.PlaneGeometry(2.5, 2.5), this.shockMat()); ring.material.color = col.clone(); ring.material.opacity = .5; ring.rotation.x = -Math.PI / 2; ring.position.y = -.95; grp.add(ring);
+      const ring = new THREE.Mesh(new THREE.PlaneGeometry(2.1, 2.1), this.shockMat(true)); ring.material.color = col.clone(); ring.material.opacity = .25; ring.rotation.x = -Math.PI / 2; ring.position.y = -.95; grp.add(ring);
       const sel = new THREE.Mesh(new THREE.TorusGeometry(1.45, .018, 8, 96), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false }));
       grp.add(sel);
       const stem = new THREE.Mesh(new THREE.CylinderGeometry(.006, .006, 1.6, 4), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: .35, blending: THREE.AdditiveBlending, depthWrite: false })); stem.position.y = -1.75; grp.add(stem);
@@ -497,7 +497,7 @@ export class Deck {
       animateAvatar(n.av, n, t, ds, now, this.camera, n.glow); n.av.badge.position.y = n.av.top + .78 + Math.sin(t * 1.3 + k) * .05; n.av.badge.material.opacity = (.55 + n.glow * .35 + n.hoverK * .3) * ap;
       n.halo.material.opacity = (.1 + n.glow * .22 + n.flare * .5 + n.hoverK * .18) * ap; n.halo.scale.setScalar(3 + n.glow * .9 + n.flare * 2.2);
       n.ring.rotation.z += ds * (st === "working" ? 1.6 : st === "waiting" ? -.6 : .15) * mo;
-      n.ring.material.color.set(st === "waiting" ? "#fbbf24" : n.bot.color); n.ring.material.opacity = ({ working: .9, waiting: .75, idle: .3, unknown: .15 }[st] + n.flare * .5) * ap;
+      n.ring.material.color.set(st === "waiting" ? "#fbbf24" : n.bot.color); n.ring.material.opacity = ({ working: .42, waiting: .36, idle: .14, unknown: .07 }[st] + n.flare * .3) * ap;
       n.sel.material.opacity = n.selK * .9; n.sel.rotation.set(Math.PI / 2 + Math.sin(t * .9) * .12, Math.cos(t * .7) * .12, t * .5); n.sel.position.y = -.2; n.sel.scale.setScalar(1 + Math.sin(t * 3) * .03);
       n.grp.getWorldPosition(n.world);
       tmp.copy(n.world); tmp.y += n.av.top + 1.2; this.place(n.label, tmp, ap);
