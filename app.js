@@ -278,7 +278,7 @@ async function systemPrompt() {
   return (style ? "Your own Voice & Style notes (follow them):\n" + style + "\n\n" : "You are Jarvis, the user's chief of staff: calm, British, short and precise, with a little dry humour.\n\n") +
 `You are speaking through the Jarvis Command Deck, a live voice link. It is a HUD surface, so use the user's name only when it adds something.
 Reply in one to three short spoken sentences: plain natural speech with contractions, no markdown, lists, symbols, emoji or URLs.
-You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, route it: the deck adds it to your Second Brain inbox addressed to that bot. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a routed job is done or started; say you've passed it on or queued it. Do not mention router timing; the deck adds that.
+You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, route it: the deck adds it to your Second Brain inbox addressed to that bot. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a routed job is done or started; say you've passed it on or queued it. If your spoken reply says you are passing, routing, sending or handing a job to a crew member, route MUST be a non-null object with that bot's exact crew name and a task brief. Never say you have passed a job on unless route is set. Do not mention router timing; the deck adds that.
 Crew (name: role · live status snapshot, may be out of date):
 ${crewBrief()}
 Current date and time: ${now} (Europe/London).
@@ -286,13 +286,52 @@ Respond with ONLY a JSON object and nothing else:
 {"reply": "<what you say aloud>", "route": {"bot": "<exact crew name>", "task": "<one-line brief for that bot with the needed detail>"} }
 or {"reply": "...", "route": null}`;
 }
-function parseReply(raw) {
+function firstJsonObject(t) {
+  const a = String(t || "").indexOf("{"); if (a < 0) return null;
+  let d = 0, str = false, esc = false;
+  for (let i = a; i < t.length; i++) {
+    const c = t[i];
+    if (str) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') str = false; continue; }
+    if (c === '"') { str = true; continue; }
+    if (c === "{") d++;
+    else if (c === "}") { d--; if (d === 0) return t.slice(a, i + 1); }
+  }
+  return null;
+}
+function routeName(o) {
+  if (o == null) return "";
+  if (typeof o === "string") return o;
+  if (typeof o === "object") return o.bot || o.routedTo || o.to || o.name || "";
+  return "";
+}
+function routeFrom(o) {
+  if (!o || o.route === null) return null;
+  const name = routeName(o.route) || routeName({ bot: o.bot, routedTo: o.routedTo, to: o.to });
+  const task = (o.route && typeof o.route === "object" && (o.route.task || o.route.text)) || o.task || "";
+  const i = botIndex(name); return i > 0 ? { i, task: String(task || "").trim() } : null;
+}
+function claimingHandoff(text) {
+  return /\b(?:pass(?:ing|ed)?|rout(?:e|ed|ing)|send(?:ing)?|sent|hand(?:ing|ed)?)\b[\s\S]{0,100}?\bto\s+[A-Za-z]/i.test(String(text || ""));
+}
+function inferHandoff(reply, userText) {
+  const t = String(reply || "");
+  if (!claimingHandoff(t)) return null;
+  const re = /\bto\s+([A-Za-z][A-Za-z ·-]{0,40})/gi; let m;
+  while ((m = re.exec(t))) { const i = botIndex(m[1]); if (i > 0) return { i, task: String(userText || "").trim() }; }
+  return null;
+}
+function withoutHandoffClaim(reply) {
+  if (!claimingHandoff(reply)) return reply;
+  return "I haven't queued that for a crew member yet. Please say it again and I'll make sure it's passed on.";
+}
+function parseReply(raw, userText) {
   let t = String(raw || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
-  const a = t.indexOf("{"), b = t.lastIndexOf("}");
-  if (a >= 0 && b > a) { try { const o = JSON.parse(t.slice(a, b + 1)); let route = null;
-    if (o.route && o.route.bot) { const i = botIndex(o.route.bot); if (i > 0) route = { i, task: String(o.route.task || "").trim() }; }
-    return { reply: String(o.reply || "").trim(), route }; } catch { } }
-  return { reply: t.replace(/[{}"]/g, "").trim(), route: null };
+  const js = firstJsonObject(t);
+  let reply = "", route = null;
+  if (js) { try { const o = JSON.parse(js); reply = String(o.reply || "").trim(); route = routeFrom(o); } catch { } }
+  if (!reply) reply = t.replace(/[{}"]/g, "").trim();
+  if (!route) route = inferHandoff(reply, userText) || inferHandoff(t, userText);
+  return { reply, route };
 }
 async function askJarvis(text) {
   const input = [{ role: "system", content: await systemPrompt() }, ...D.hist.slice(-8), { role: "user", content: text }];
@@ -303,7 +342,7 @@ async function askJarvis(text) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error((d.error && (d.error.message || d.error)) || ("HTTP " + r.status));
     const out = d.output_text || (d.output || []).filter(o => o.type === "message").flatMap(o => o.content || []).filter(x => x.type === "output_text").map(x => x.text).join(" ");
-    return parseReply(out);
+    return parseReply(out, text);
   } finally { clearTimeout(to); }
 }
 
@@ -329,6 +368,7 @@ async function converse(text, spoken) {
       addMsg("sys", "Jarvis couldn't reply (" + msg + ")."); if (speakIt) speak("Sorry, I couldn't reach my reply service just then."); else setMode(null); return; }
     D.thinking = false;
     let reply = res.reply || "Understood.", route = null;
+    if (!res.route) reply = withoutHandoffClaim(reply);
     if (res.route) {
       const i = res.route.i, name = ROSTER[i].name; deck && deck.fire(i, "out"); route = { i, ok: false };
       if (!token()) reply += ` Second Brain isn't linked on this device, so ${name} hasn't got it yet.`;
@@ -471,7 +511,7 @@ $("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" :
 $("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
 $("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
 setInterval(() => { if (histQ.length) flushHistory(); }, 30000);
-window.__talk = { converse, parseReply, setMode, speak, D };
+window.__talk = { converse, parseReply, inferHandoff, withoutHandoffClaim, setMode, speak, D };
 
 // ---------- boot ----------
 async function boot() {
