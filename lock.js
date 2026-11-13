@@ -193,7 +193,7 @@ async function accept() {
   unlockWaiters.splice(0).forEach(fn => fn());
   if (!started) {
     started = true;
-    app = await import("./app.js?v=261");
+    app = await import("./app.js?v=262");
     await app.boot();
   } else if (app && app.resumeDeck) {
     app.resumeDeck();

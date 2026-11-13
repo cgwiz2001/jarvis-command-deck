@@ -1,6 +1,6 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, ROUTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=261";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=261";
+import { ROSTER, ROUTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=262";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=262";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -89,12 +89,18 @@ function toast(html, ms = 4200) { const t = document.createElement("div"); t.cla
   setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 520); }, ms); }
 
 // ---------- polling ----------
-let pollTimer = null, backoff = 0, pollChain = Promise.resolve();
+let pollTimer = null, backoff = 0, pollChain = Promise.resolve(), lastPollSig = null;
 async function poll() {
   if (S.suspended) return;
   const p = pollChain.then(pollOnce, pollOnce);
   pollChain = p.catch(() => {});
   return p;
+}
+function refreshAgo() {
+  document.querySelectorAll("#feed [data-ago], #dossier [data-ago]").forEach(el => {
+    const next = ago(el.dataset.ago);
+    if (el.textContent !== next) el.textContent = next;
+  });
 }
 async function pollOnce() {
   if (S.suspended) return;
@@ -103,10 +109,31 @@ async function pollOnce() {
   try {
     const [a, b] = await Promise.all([sbGet(c.status), sbGet(c.inbox)]);
     const st = sbJson(a.n.markdown), ib = sbJson(b.n.markdown);
-    S.bots = Array.isArray(st.bots) ? st.bots : []; S.inbox = Array.isArray(ib.requests) ? ib.requests : []; S.at = Date.now(); S.err = null; backoff = 0;
-    ingest();
-  } catch (e) { S.err = e.message; backoff = Math.min(backoff + 1, 4); }
-  S.polling = false; renderAll();
+    const nextBots = Array.isArray(st.bots) ? st.bots : [];
+    const nextInbox = Array.isArray(ib.requests) ? ib.requests : [];
+    const nextSig = JSON.stringify([nextBots, nextInbox]);
+    const changed = nextSig !== lastPollSig || S.err !== null;
+    S.bots = nextBots; S.inbox = nextInbox; S.at = Date.now(); S.err = null; backoff = 0;
+    S.polling = false;
+    if (changed) {
+      lastPollSig = nextSig;
+      ingest();
+      renderAll();
+    } else {
+      if (S.freshIds.size) {
+        S.freshIds.clear();
+        const f = $("feed"); if (f) f.querySelectorAll(".card.fresh").forEach(el => el.classList.remove("fresh"));
+      }
+      renderLink();
+      refreshAgo();
+    }
+  } catch (e) {
+    const prevErr = S.err;
+    S.err = e.message; backoff = Math.min(backoff + 1, 4);
+    S.polling = false;
+    renderLink();
+    if (S.err !== prevErr) renderFeed();
+  }
   clearTimeout(pollTimer); if (!S.suspended) pollTimer = setTimeout(() => { poll(); }, POLL_MS * (1 + backoff));
 }
 async function confirmQueued(id) {
@@ -137,11 +164,18 @@ function ingest() {
 
 // ---------- rendering ----------
 function renderLink() {
-  const p = $("linkPill"), t = $("linkTxt"); p.classList.remove("live", "err");
-  if (!token()) { t.textContent = "Not linked"; return; }
-  if (S.err) { p.classList.add("err"); t.textContent = S.err === "no token" ? "Not linked" : "Link error"; p.title = "Second Brain: " + S.err; return; }
-  if (S.at) { p.classList.add("live"); t.textContent = "Live · " + new Date(S.at).toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }); p.title = "Second Brain linked. Checks every " + Math.round(POLL_MS / 1000) + "s."; }
-  else t.textContent = "Linking…";
+  const p = $("linkPill"), t = $("linkTxt");
+  let cls = "", txt = "Linking…", title = p.title || "";
+  if (!token()) { txt = "Not linked"; title = ""; }
+  else if (S.err) { cls = "err"; txt = S.err === "no token" ? "Not linked" : "Link error"; title = "Second Brain: " + S.err; }
+  else if (S.at) { cls = "live"; txt = "Live · " + new Date(S.at).toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }); title = "Second Brain linked. Checks every " + Math.round(POLL_MS / 1000) + "s."; }
+  const key = cls + "|" + txt + "|" + title;
+  if (p._lastKey === key) return;
+  p._lastKey = key;
+  p.classList.toggle("live", cls === "live");
+  p.classList.toggle("err", cls === "err");
+  t.textContent = txt;
+  p.title = title;
 }
 function stepper(status) {
   const k = { new: 0, routed: 1, answered: 2 }[status] ?? 0;
@@ -150,45 +184,69 @@ function stepper(status) {
 }
 function chip(i) { if (i < 0) return ""; const b = ROSTER[i]; return `<span class="chip" data-sel="${i}" style="--c:${b.color}">${esc(b.name)}</span>`; }
 function renderFeed() {
-  const el = $("feed");
-  if (!token() || (S.err && !S.inbox.length)) {
-    el.innerHTML = `<div class="empty"><b>${!token() ? "UPLINK OFFLINE" : "LINK ERROR"}</b>${!token() ? "Add your Second Brain token in Settings to see Jarvis's inbox and the crew's live status." : "Can't reach Second Brain right now (" + esc(S.err) + "). Retrying automatically."}<div style="margin-top:14px"><button class="btn" data-open="settings">Open settings</button></div></div>`; return;
-  }
+  const el = $("feed"), scroller = $("tab-feed");
+  const errMsg = S.err && !S.inbox.length ? S.err : null;
   const list = S.inbox.slice().reverse().slice(0, 30);
-  if (!list.length) { el.innerHTML = `<div class="empty"><b>STANDING BY</b>No requests yet. Brief Jarvis below, Commander.</div>`; return; }
-  el.innerHTML = list.map(r => { const bi = botIndex(r.routedTo), c = bi >= 0 ? ROSTER[bi].color : "#5fd4e8";
-    return `<div class="card ${S.freshIds.has(r.id) ? "fresh" : ""}" style="--c:${c}"><div class="t">${esc(r.text)}</div>${stepper(r.status)}
-      <div class="meta"><span>${esc(ago(r.createdAt))}</span>${bi >= 0 ? "<span>→</span>" + chip(bi) : r.routedTo ? "<span>→ " + esc(r.routedTo) + "</span>" : ""}</div>
-      ${r.reply ? `<div class="reply">${esc(r.reply)}</div>` : ""}</div>`; }).join("");
+  const key = JSON.stringify([!!token(), errMsg, list, [...S.freshIds]]);
+  if (el._lastKey === key) { refreshAgo(); return; }
+  el._lastKey = key;
+  const top = scroller ? scroller.scrollTop : 0;
+  if (!token() || errMsg) {
+    el.innerHTML = `<div class="empty"><b>${!token() ? "UPLINK OFFLINE" : "LINK ERROR"}</b>${!token() ? "Add your Second Brain token in Settings to see Jarvis's inbox and the crew's live status." : "Can't reach Second Brain right now (" + esc(S.err) + "). Retrying automatically."}<div style="margin-top:14px"><button class="btn" data-open="settings">Open settings</button></div></div>`;
+  } else if (!list.length) {
+    el.innerHTML = `<div class="empty"><b>STANDING BY</b>No requests yet. Brief Jarvis below, Commander.</div>`;
+  } else {
+    el.innerHTML = list.map(r => { const bi = botIndex(r.routedTo), c = bi >= 0 ? ROSTER[bi].color : "#5fd4e8";
+      return `<div class="card ${S.freshIds.has(r.id) ? "fresh" : ""}" data-id="${esc(r.id || "")}" style="--c:${c}"><div class="t">${esc(r.text)}</div>${stepper(r.status)}
+        <div class="meta"><span data-ago="${esc(r.createdAt || "")}">${esc(ago(r.createdAt))}</span>${bi >= 0 ? "<span>→</span>" + chip(bi) : r.routedTo ? "<span>→ " + esc(r.routedTo) + "</span>" : ""}</div>
+        ${r.reply ? `<div class="reply">${esc(r.reply)}</div>` : ""}</div>`; }).join("");
+  }
+  if (scroller) scroller.scrollTop = top;
 }
 function renderCrew() {
-  $("crew").innerHTML = ROSTER.map((b, i) => { const s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown";
+  const el = $("crew");
+  const dataKey = ROSTER.map((b, i) => { const s = S.botByIdx[i]; return s ? stateOf(s.state) : "unknown"; }).join("|");
+  if (el._lastDataKey === dataKey && el.children.length === ROSTER.length) {
+    el.querySelectorAll(".crow").forEach(row => row.classList.toggle("sel", +row.dataset.sel === S.selected));
+    return;
+  }
+  el._lastDataKey = dataKey;
+  el.innerHTML = ROSTER.map((b, i) => { const s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown";
     return `<div class="crow ${S.selected === i ? "sel" : ""}" data-sel="${i}" style="--c:${b.color}"><div class="orb"></div><div><div class="nm">${esc(b.name)}</div><div class="rl">${esc(b.title)}</div></div><span class="st stt ${st}">${stateLabel(st)}</span></div>`; }).join("");
 }
 function renderRouter() {
-  $("routerInfo").innerHTML = token()
+  const el = $("routerInfo"), key = Boolean(token());
+  if (el._lastKey === key) return;
+  el._lastKey = key;
+  el.innerHTML = key
     ? "INSTANT ROUTING · jobs go to the crew through Second Brain as soon as they're queued"
     : `INSTANT ROUTING · link Second Brain in <a href="#" data-open="settings">Settings</a> to queue jobs for the crew`;
 }
 function renderDossier() {
   const i = S.selected, el = $("dossier"), panel = $("right");
-  if (i == null) { panel.classList.remove("open"); return; }
+  if (i == null) { panel.classList.remove("open"); el._lastKey = ""; return; }
   const b = ROSTER[i], s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown";
   const reqs = S.inbox.filter(r => botIndex(r.routedTo) === i).slice().reverse().slice(0, 5);
+  const key = JSON.stringify([i, !!token(), s || null, reqs]);
+  if (el._lastKey === key && panel.classList.contains("open")) { refreshAgo(); return; }
+  el._lastKey = key;
+  const top = panel.scrollTop;
   el.innerHTML = `<div class="dh" style="--c:${b.color}"><div class="orb"></div><div><h3>${esc(b.name.toUpperCase())}</h3><p>${esc(b.title)}</p></div></div>
     <span class="stt ${st}">${stateLabel(st)}</span>
     <div class="dbox"><h5>Live status line</h5><div class="ln">${s ? esc(s.note || "—") : (token() ? "No status line for this bot in Second Brain yet." : "Link Second Brain in Settings to see live status.")}</div>${s && s.updatedAt ? `<div class="sm">Updated ${esc(fmtTime(s.updatedAt))}</div>` : ""}</div>
     ${i === 0 ? `<div class="dbox"><h5>Routing</h5><div class="ln">Every message you send here lands in Jarvis's inbox. Second Brain then routes it to the right bot automatically.</div></div>`
-      : `<div class="dbox"><h5>Recent requests via Jarvis</h5>${reqs.length ? reqs.map(r => `<div class="mini">${esc(r.text)}<div class="sm">${esc(r.status)} · ${esc(ago(r.createdAt))}</div></div>`).join("") : `<div class="ln muted">None yet.</div>`}</div>`}
+      : `<div class="dbox"><h5>Recent requests via Jarvis</h5>${reqs.length ? reqs.map(r => `<div class="mini">${esc(r.text)}<div class="sm">${esc(r.status)} · <span data-ago="${esc(r.createdAt || "")}">${esc(ago(r.createdAt))}</span></div></div>`).join("") : `<div class="ln muted">None yet.</div>`}</div>`}
     <button class="btn dact" id="briefBtn">${i === 0 ? "Brief Jarvis" : "Ask Jarvis to brief " + esc(b.name)}</button>`;
   panel.classList.add("open");
+  panel.scrollTop = top;
   $("briefBtn").onclick = () => { const inp = $("cmdIn"); inp.value = i === 0 ? "" : `For ${b.name}: `; inp.focus(); if (mobileQ.matches) closeLeft(); };
 }
 function renderAll() { renderLink(); renderFeed(); renderCrew(); renderRouter(); renderDossier(); shift(); if (typeof renderNote === "function" && !D.mode) renderNote(); }
 
 // ---------- selection & panels ----------
 function select(i) { S.selected = i; if (deck) deck.select(i, true); if (i != null && mobileQ.matches) closeLeft(); renderCrew(); renderDossier(); shift(); }
-function shift() { if (!deck) return; const L = $("left").classList.contains("open"), R = $("right").classList.contains("open"); deck.setShift(mobileQ.matches ? 0 : (L ? 130 : 0) - (R ? 130 : 0)); }
+let lastShift = null;
+function shift() { if (!deck) return; const L = $("left").classList.contains("open"), R = $("right").classList.contains("open"); const s = mobileQ.matches ? 0 : (L ? 130 : 0) - (R ? 130 : 0); if (s === lastShift) return; lastShift = s; deck.setShift(s); }
 function openLeft(tab) { $("left").classList.add("open"); document.body.classList.add("leftopen"); setTab(tab || "talk"); setTimeout(shift); if (mobileQ.matches && S.selected != null) select(null); renderCaption(); }
 function closeLeft() { setTimeout(shift); $("left").classList.remove("open"); document.body.classList.remove("leftopen"); for (const k in TABS) $(TABS[k]).classList.remove("on"); renderCaption(); }
 const TABS = { talk: "talkTabBtn", feed: "feedBtn", crew: "crewBtn" };
@@ -219,10 +277,10 @@ function openSettings() {
 }
 $("setBtn").onclick = openSettings; $("setClose").onclick = () => $("settings").hidden = true;
 $("settings").addEventListener("click", e => { if (e.target.id === "settings") $("settings").hidden = true; });
-$("tokSave").onclick = () => { const v = $("tokIn").value.trim(); if (!v) return; LS.set("jcd.tok", v); $("tokIn").value = ""; $("tokState").textContent = "Token saved on this device (hidden)."; S.err = null; poll(); };
-$("tokForget").onclick = () => { LS.del("jcd.tok"); $("tokState").textContent = tokenSource() === "hud" ? "Deck token forgotten. The HUD's token on this device is still used." : "Token forgotten."; S.inbox = []; S.bots = []; S.at = 0; ingest(); renderAll(); if (token()) poll(); };
+$("tokSave").onclick = () => { const v = $("tokIn").value.trim(); if (!v) return; LS.set("jcd.tok", v); $("tokIn").value = ""; $("tokState").textContent = "Token saved on this device (hidden)."; S.err = null; lastPollSig = null; poll(); };
+$("tokForget").onclick = () => { LS.del("jcd.tok"); $("tokState").textContent = tokenSource() === "hud" ? "Deck token forgotten. The HUD's token on this device is still used." : "Token forgotten."; S.inbox = []; S.bots = []; S.at = 0; lastPollSig = null; ingest(); renderAll(); if (token()) poll(); };
 $("connSave").onclick = () => { const o = { base: $("cBase").value.trim(), set: $("cSet").value.trim(), inbox: $("cInbox").value.trim(), status: $("cStatus").value.trim(), hist: $("cHist").value.trim(), style: $("cStyle").value.trim() }; D.style = null;
-  if (o.base && !okBase(o.base)) { $("connState").textContent = "API base must be an https:// URL."; return; } LS.set("jcd.conn", JSON.stringify(o)); $("connState").textContent = "Saved on this device."; poll(); };
+  if (o.base && !okBase(o.base)) { $("connState").textContent = "API base must be an https:// URL."; return; } LS.set("jcd.conn", JSON.stringify(o)); $("connState").textContent = "Saved on this device."; lastPollSig = null; poll(); };
 $("connTest").onclick = async () => { $("connState").textContent = "Testing…"; try { const c = conn(); await sbGet(c.status); await sbGet(c.inbox); $("connState").textContent = "Link OK: both notes readable."; } catch (e) { $("connState").textContent = "Link failed: " + e.message; } };
 $("qSel").onchange = e => { LS.set("jcd.quality", e.target.value); toast("Reloading with new visual quality…", 1500); setTimeout(() => location.reload(), 700); };
 $("motionChk").onchange = e => { LS.set("jcd.reduced", e.target.checked ? "1" : "0"); setTimeout(() => location.reload(), 300); };
@@ -280,21 +338,29 @@ function renderDialog() {
 let capTimer = null;
 function renderCaption() {
   const el = $("caption"); if (!el) return; clearTimeout(capTimer);
-  if ($("left").classList.contains("open")) { el.innerHTML = ""; return; }
+  if ($("left").classList.contains("open")) {
+    if (el._lastHtml !== "") { el._lastHtml = ""; el.innerHTML = ""; }
+    return;
+  }
   const last = D.log.slice(-2).filter(m => m.who !== "sys"), fresh = last.length && Date.now() - new Date(last[last.length - 1].at) < 14000;
   let html = "";
   if (D.mode || D.interim || D.thinking || fresh) {
     const tail = D.interim || D.thinking ? last.slice(-1).filter(m => m.who === "jv") : last;
     html = tail.map(bubble).join("") + liveBubbles();
   }
-  el.innerHTML = html; if (html && !D.mode) capTimer = setTimeout(renderCaption, 14500);
+  if (el._lastHtml !== html) { el._lastHtml = html; el.innerHTML = html; }
+  if (html && !D.mode) capTimer = setTimeout(renderCaption, 14500);
 }
 
 // ----- mood (core reacts) -----
 function renderNote() {
-  const n = $("cmdNote"); n.classList.remove("mood");
+  const n = $("cmdNote");
   const lbl = { listening: "● Listening…", thinking: "◆ Jarvis is thinking…", speaking: "◉ Jarvis is speaking · tap mic to interrupt" }[D.mode];
+  const key = lbl ? ("mood:" + lbl + ":" + D.talk) : ("idle:" + !!xkey());
+  if (n._lastKey === key) return;
+  n._lastKey = key;
   if (lbl) { n.classList.add("mood"); n.textContent = lbl + (D.talk ? "  ·  Talk mode on" : ""); return; }
+  n.classList.remove("mood");
   n.innerHTML = xkey()
     ? `Jarvis replies instantly.<span class="long"> Jobs for the crew go to Jarvis's inbox; Second Brain routes them on at once.</span><span class="short"> Crew jobs: routed through Second Brain.</span>`
     : `<b>No xAI key</b>: messages go to Jarvis's inbox and are routed through Second Brain. <a href="#" data-open="settings" style="color:#5fd4e8">Add a key</a> for instant replies.`;
@@ -617,7 +683,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=261");
+      const { Deck } = await import("./scene.js?v=262");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;

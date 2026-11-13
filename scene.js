@@ -7,7 +7,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { makeAvatar, animateAvatar } from "./avatars.js?v=261";
+import { makeAvatar, animateAvatar } from "./avatars.js?v=262";
 
 const NOISE = /* glsl */`
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
@@ -440,8 +440,13 @@ export class Deck {
     const tgt = p.clone().lerp(new THREE.Vector3(0, 0, 0), .3); const cam = p.clone().addScaledVector(out, 7.6).addScaledVector(side, 4.8); cam.y = p.y + 3.8; return [tgt, cam]; }
   nodePos(i) { return i === 0 ? new THREE.Vector3(0, 0, 0) : this.nodes[i - 1].world.clone(); }
   setStates(map) { // map: idx -> "working"|"waiting"|"idle"|"unknown"
-    this.nodes.forEach((n, k) => { const s = map[k + 1] || "unknown"; n.state = s; n.label.classList.remove("working", "waiting", "idle", "unknown"); n.label.classList.add(s); });
-    const cs = map[0] || "unknown"; this.coreState = cs; this.coreLabel.classList.remove("working", "waiting", "idle", "unknown"); this.coreLabel.classList.add(cs);
+    this.nodes.forEach((n, k) => {
+      const s = map[k + 1] || "unknown";
+      if (n.state === s) return;
+      n.state = s; n.label.classList.remove("working", "waiting", "idle", "unknown"); n.label.classList.add(s);
+    });
+    const cs = map[0] || "unknown";
+    if (this.coreState !== cs) { this.coreState = cs; this.coreLabel.classList.remove("working", "waiting", "idle", "unknown"); this.coreLabel.classList.add(cs); }
   }
   // ---- beams ----
   makeBeamMeshes(color) {
