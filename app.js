@@ -161,7 +161,7 @@ function renderFeed() {
   }
   const list = S.inbox.slice().reverse().slice(0, 30);
   if (!list.length) { el.innerHTML = `<div class="empty"><b>STANDING BY</b>No requests yet. Brief Jarvis below, Commander.</div>`; return; }
-  el.innerHTML = list.map(r => { const bi = botIndex(r.routedTo), c = bi >= 0 ? ROSTER[bi].color : "#6366f1";
+  el.innerHTML = list.map(r => { const bi = botIndex(r.routedTo), c = bi >= 0 ? ROSTER[bi].color : "#5fd4e8";
     return `<div class="card ${S.freshIds.has(r.id) ? "fresh" : ""}" style="--c:${c}"><div class="t">${esc(r.text)}</div>${stepper(r.status)}
       <div class="meta"><span>${esc(ago(r.createdAt))}</span>${bi >= 0 ? "<span>→</span>" + chip(bi) : r.routedTo ? "<span>→ " + esc(r.routedTo) + "</span>" : ""}</div>
       ${r.reply ? `<div class="reply">${esc(r.reply)}</div>` : ""}</div>`; }).join("");
@@ -291,7 +291,7 @@ function renderNote() {
   if (lbl) { n.classList.add("mood"); n.textContent = lbl + (D.talk ? "  ·  Talk mode on" : ""); return; }
   n.innerHTML = xkey()
     ? `Jarvis replies instantly.<span class="long"> Jobs for the crew go to Jarvis's inbox and are passed on at once if the instant link is set in Settings.</span><span class="short"> Crew jobs: passed on instantly if the link is set.</span>`
-    : `<b>No xAI key</b>: messages go to Jarvis's inbox; add the instant link in Settings so they're passed on at once. <a href="#" data-open="settings" style="color:#c4b5fd">Add a key</a> for instant replies.`;
+    : `<b>No xAI key</b>: messages go to Jarvis's inbox; add the instant link in Settings so they're passed on at once. <a href="#" data-open="settings" style="color:#5fd4e8">Add a key</a> for instant replies.`;
 }
 function setMode(m) {
   D.mode = m || null; ["listening", "thinking", "speaking"].forEach(k => document.body.classList.toggle("m-" + k, D.mode === k));

@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
-<meta name="theme-color" content="#05060b">
+<meta name="theme-color" content="#04090f">
 <meta name="color-scheme" content="dark">
 <title>Jarvis Command Deck</title>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Orbitron:wght@500;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Orbitron:wght@500;700;800&family=Michroma&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3CradialGradient id='g'%3E%3Cstop offset='0' stop-color='%23f5f3ff'/%3E%3Cstop offset='.45' stop-color='%23a78bfa'/%3E%3Cstop offset='1' stop-color='%234338ca' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='%2305060b'/%3E%3Ccircle cx='32' cy='32' r='20' fill='url(%23g)'/%3E%3Ccircle cx='32' cy='32' r='25' fill='none' stroke='%23818cf8' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23cfe8ff'/%3E%3Cstop offset='1' stop-color='%232a9df4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='%2304090f'/%3E%3Ccircle cx='32' cy='32' r='21' fill='none' stroke='%235fd4e8' stroke-width='1.6' opacity='.85'/%3E%3Cpath d='M38 18h6v22.5c0 6.2-4.2 11-12.2 11S20 46.7 20 40.5' fill='none' stroke='url(%23g)' stroke-width='5.2' stroke-linecap='round'/%3E%3C/svg%3E">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
@@ -24,14 +24,70 @@
 
 <div id="boot" role="status">
   <div class="boot-ring"><i></i><i></i><i></i></div>
-  <div class="boot-title">JARVIS <span>COMMAND DECK</span></div>
+  <div class="logo logo-boot">
+    <svg class="logo-word" viewBox="0 0 268 38" role="img" aria-label="Jarvis" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="jboot-g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#f4fbff"/>
+            <stop offset="0.14" stop-color="#cfe8ff"/>
+            <stop offset="0.42" stop-color="#7ec8f8"/>
+            <stop offset="0.72" stop-color="#2a9df4"/>
+            <stop offset="1" stop-color="#0e62b8"/>
+          </linearGradient>
+          <linearGradient id="jboot-b" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#fff" stop-opacity=".8"/>
+            <stop offset="0.3" stop-color="#fff" stop-opacity="0"/>
+            <stop offset="1" stop-color="#032047" stop-opacity=".3"/>
+          </linearGradient>
+          <filter id="jboot-f" x="-12%" y="-45%" width="124%" height="190%">
+            <feGaussianBlur stdDeviation="1.5" result="blur"/>
+            <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.16  0 0 0 0 0.62  0 0 0 0 0.96  0 0 0 0.75 0" result="glow"/>
+            <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <g filter="url(#jboot-f)" transform="translate(8,29) skewX(-8)">
+          <text font-family="Michroma, Orbitron, sans-serif" font-size="26" letter-spacing="6" fill="url(#jboot-g)">JARVIS</text>
+          <text font-family="Michroma, Orbitron, sans-serif" font-size="26" letter-spacing="6" fill="url(#jboot-b)">JARVIS</text>
+        </g>
+      </svg>
+    <div class="logo-sub"><i class="logo-rule l"></i><span>COMMAND DECK</span><i class="logo-rule r"></i></div>
+  </div>
   <div class="boot-line" id="bootLine">Initialising uplink…</div>
 </div>
 
 <header id="top" class="glass-strip">
   <div class="brand">
-    <div class="mark" aria-hidden="true"><svg viewBox="0 0 40 40"><defs><linearGradient id="mg" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#c4b5fd"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs><polygon points="20,2 36,11 36,29 20,38 4,29 4,11" fill="none" stroke="url(#mg)" stroke-width="2"/><circle cx="20" cy="20" r="6" fill="url(#mg)"/></svg></div>
-    <div class="bt"><b>JARVIS <em class="ver">v2.2</em></b><span>COMMAND DECK</span></div>
+    <div class="logo">
+      <div class="logo-row">
+        <svg class="logo-word" viewBox="0 0 268 38" role="img" aria-label="Jarvis" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="jtop-g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#f4fbff"/>
+            <stop offset="0.14" stop-color="#cfe8ff"/>
+            <stop offset="0.42" stop-color="#7ec8f8"/>
+            <stop offset="0.72" stop-color="#2a9df4"/>
+            <stop offset="1" stop-color="#0e62b8"/>
+          </linearGradient>
+          <linearGradient id="jtop-b" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#fff" stop-opacity=".8"/>
+            <stop offset="0.3" stop-color="#fff" stop-opacity="0"/>
+            <stop offset="1" stop-color="#032047" stop-opacity=".3"/>
+          </linearGradient>
+          <filter id="jtop-f" x="-12%" y="-45%" width="124%" height="190%">
+            <feGaussianBlur stdDeviation="1.5" result="blur"/>
+            <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.16  0 0 0 0 0.62  0 0 0 0 0.96  0 0 0 0.75 0" result="glow"/>
+            <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <g filter="url(#jtop-f)" transform="translate(8,29) skewX(-8)">
+          <text font-family="Michroma, Orbitron, sans-serif" font-size="26" letter-spacing="6" fill="url(#jtop-g)">JARVIS</text>
+          <text font-family="Michroma, Orbitron, sans-serif" font-size="26" letter-spacing="6" fill="url(#jtop-b)">JARVIS</text>
+        </g>
+      </svg>
+        <em class="ver">v2.3</em>
+      </div>
+      <div class="logo-sub"><i class="logo-rule l"></i><span>COMMAND DECK</span><i class="logo-rule r"></i></div>
+    </div>
   </div>
   <div class="tools">
     <button class="pill" id="linkPill" title="Second Brain link"><span class="dot"></span><span id="linkTxt">Offline</span></button>

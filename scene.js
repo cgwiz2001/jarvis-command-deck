@@ -152,7 +152,7 @@ export class Deck {
     const r = this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: "high-performance", alpha: false, stencil: false });
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.05; r.outputColorSpace = THREE.SRGBColorSpace;
     this.dpr = Math.min(window.devicePixelRatio || 1, this.tier.maxDpr); r.setPixelRatio(this.dpr);
-    const s = this.scene = new THREE.Scene(); s.background = new THREE.Color(0x04050a); s.fog = new THREE.FogExp2(0x05060c, .011);
+    const s = this.scene = new THREE.Scene(); s.background = new THREE.Color(0x04090f); s.fog = new THREE.FogExp2(0x08121d, .011);
     const pm = new THREE.PMREMGenerator(r); s.environment = pm.fromScene(new RoomEnvironment(), .04).texture; pm.dispose();
     s.environmentIntensity = .55;
     this.camera = new THREE.PerspectiveCamera(42, 1, .1, 1200);
@@ -166,10 +166,10 @@ export class Deck {
     c.addEventListener("end", () => { this.lastInteract = performance.now(); this.userDriving = false; });
     this.glowTex = glowTexture([[0, "rgba(255,255,255,1)"], [.18, "rgba(255,255,255,.55)"], [.45, "rgba(255,255,255,.12)"], [1, "rgba(255,255,255,0)"]]);
     this.ringTex = dashRingTexture(48, .55); this.ringTexThin = dashRingTexture(48, .55, true);
-    s.add(new THREE.HemisphereLight(0x6d5dfc, 0x05060b, .5));
-    const k1 = new THREE.DirectionalLight(0xa78bfa, 1.4); k1.position.set(-8, 10, 6); s.add(k1);
-    const k2 = new THREE.DirectionalLight(0x60a5fa, .8); k2.position.set(9, 3, -8); s.add(k2);
-    this.coreLight = new THREE.PointLight(0xa78bfa, 60, 30, 1.6); s.add(this.coreLight);
+    s.add(new THREE.HemisphereLight(0x5fd4e8, 0x04090f, .48));
+    const k1 = new THREE.DirectionalLight(0xcfe8ff, 1.25); k1.position.set(-8, 10, 6); s.add(k1);
+    const k2 = new THREE.DirectionalLight(0x2a9df4, .75); k2.position.set(9, 3, -8); s.add(k2);
+    this.coreLight = new THREE.PointLight(0x5fd4e8, 60, 30, 1.6); s.add(this.coreLight);
     this.buildSky(); this.buildStars(); this.buildFloor(); this.buildCore(); this.buildNodes(); this.buildPost();
     this.raycaster = new THREE.Raycaster(); this.ptr = new THREE.Vector2(9, 9); this.ptrActive = false;
     this.bindInput(); this.resize(); addEventListener("resize", () => this.resize());
@@ -185,9 +185,13 @@ export class Deck {
         void main(){ vec3 d=normalize(vD); float band=exp(-pow((d.y+.18*sin(d.x*2.4))*3.2,2.));
           float n=fbm(d*2.1+vec3(uTime*.004,0.,uTime*.003)); float n2=fbm(d*4.3-vec3(0.,uTime*.006,0.));
           float neb=smoothstep(-.15,.85,n)*(.35+.65*band);
-          vec3 c=vec3(.012,.013,.03);
-          c+=vec3(.20,.10,.55)*neb*.55; c+=vec3(.55,.22,.85)*pow(max(n2,0.),2.)*band*.45;
-          c+=vec3(.15,.25,.75)*pow(max(n*n2,0.),1.5)*.6;
+          vec3 c=vec3(.016,.035,.06);
+          c+=vec3(.05,.22,.32)*neb*.42; c+=vec3(.18,.50,.62)*pow(max(n2,0.),2.)*band*.28;
+          c+=vec3(.10,.28,.40)*pow(max(n*n2,0.),1.5)*.4;
+          vec2 hz=d.xz/max(abs(d.y),.12);
+          vec2 hs=vec2(1.,1.7320508); vec2 ha=abs(mod(hz*1.6,hs)-hs*.5); vec2 hb=abs(mod(hz*1.6-hs*.5,hs)-hs*.5);
+          vec2 hh=dot(ha,ha)<dot(hb,hb)?ha:hb; float hex=smoothstep(.05,0.,abs(max(hh.x*1.5+hh.y*.866,hh.y*1.732)-.866));
+          c+=vec3(.15,.40,.50)*hex*smoothstep(.55,-.15,d.y)*.12;
           c*=.9-.4*max(-d.y,0.);
           gl_FragColor=vec4(c,1.); }` });
     this.sky = new THREE.Mesh(new THREE.SphereGeometry(600, 48, 32), m); this.sky.frustumCulled = false; this.scene.add(this.sky);
@@ -213,8 +217,8 @@ export class Deck {
         fragmentShader: `varying vec3 vC; varying float vA; void main(){ vec2 p=gl_PointCoord-.5; float d=length(p); float a=smoothstep(.5,.0,d); a=a*a+.6*smoothstep(.08,0.,d); gl_FragColor=vec4(vC*a*vA,a*vA); }` });
       const p = new THREE.Points(g, m); p.frustumCulled = false; return p;
     };
-    this.stars = mk(this.tier.stars, 90, 420, 1.2, 7, ["#ffffff", "#e0e7ff", "#c4b5fd", "#a5b4fc", "#f5d0fe"]);
-    this.dust = mk(this.tier.dust, 6, 40, .5, 2.2, ["#818cf8", "#a78bfa", "#c084fc", "#6366f1"]);
+    this.stars = mk(this.tier.stars, 90, 420, 1.2, 7, ["#ffffff", "#cfe8ff", "#99ced9", "#5fd4e8", "#b2d4d9"]);
+    this.dust = mk(this.tier.dust, 6, 40, .5, 2.2, ["#223c47", "#4a717d", "#5fd4e8", "#99ced9"]);
     this.dust.material.uniforms.uDpr = this.stars.material.uniforms.uDpr;
     this.scene.add(this.stars, this.dust);
   }
@@ -224,14 +228,15 @@ export class Deck {
       vertexShader: `varying vec2 vP; void main(){ vP=position.xy; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
       fragmentShader: `uniform float uTime; uniform float uPulseT; uniform float uR; varying vec2 vP;
         float ln(float x,float w){ float f=abs(fract(x)-.5); return smoothstep(w,0.,.5-f); }
+        float hexGrid(vec2 p){ vec2 s=vec2(1.,1.7320508); vec2 a=abs(mod(p,s)-s*.5); vec2 b=abs(mod(p-s*.5,s)-s*.5); vec2 h=dot(a,a)<dot(b,b)?a:b; return smoothstep(.045,0.,abs(max(h.x*1.5+h.y*.866,h.y*1.732)-.866)); }
         void main(){ float r=length(vP); float a=atan(vP.y,vP.x);
           float fade=exp(-r*.14)*smoothstep(0.,1.2,r)*(1.-smoothstep(7.5,12.,r));
-          float rings=ln(r*.25,.022)*.2; float spokes=ln(a/6.28318*12.,.03*clamp(r*.06,.3,1.))*.09*smoothstep(1.5,4.,r);
-          float fine=0.;
+          float rings=ln(r*.25,.018)*.22; float spokes=ln(a/6.28318*3.,.012*clamp(r*.05,.25,1.))*.22*smoothstep(1.2,3.,r);
+          float hex=hexGrid(vP*.72)*.16;
           float orbit=exp(-pow((r-uR)*12.,2.))*.2 + exp(-pow((r-uR)*1.8,2.))*.03;
           float sweepA=mod(a-uTime*.16,6.28318); float sweep=exp(-sweepA*2.6)*.12*smoothstep(1.,3.,r)*(1.-smoothstep(8.,11.,r));
           float pt=uTime-uPulseT; float pulse=exp(-pow((r-pt*9.)*1.4,2.))*exp(-pt*.9)*step(0.,pt)*1.8;
-          vec3 c=vec3(.26,.24,.75)*(rings+spokes+fine)+vec3(.55,.36,1.)*orbit+vec3(.42,.3,1.)*sweep*(.4+rings*2.)+vec3(.85,.6,1.)*pulse*.6;
+          vec3 c=vec3(.22,.62,.72)*(rings+spokes+hex)+vec3(.37,.82,.90)*orbit+vec3(.91,.87,.69)*orbit*.18+vec3(.37,.78,.85)*sweep*(.4+rings*2.)+vec3(.82,.92,.97)*pulse*.55;
           gl_FragColor=vec4(c*fade,1.); }` });
     const f = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), m); f.rotation.x = -Math.PI / 2; f.position.y = -2.6; this.scene.add(f);
   }
@@ -247,24 +252,24 @@ export class Deck {
           vec3 q=vP*1.7; float e=snoise(q+vec3(uTime*.25,-uTime*.18,uTime*.1)); float e2=snoise(q*2.3-vec3(0.,uTime*.4,0.));
           float veins=smoothstep(.06,0.,abs(e))*.8+smoothstep(.035,0.,abs(e2))*.4;
           float bands=pow(.5+.5*sin(vP.y*16.+uTime*1.6+e*3.),8.)*.25;
-          vec3 deep=vec3(.06,.035,.22), mid=vec3(.38,.18,.95), hot=vec3(.95,.85,1.);
-          vec3 lav=vec3(.72,.55,1.);
-          vec3 c=mix(deep,mid,.5+.5*e)*.6 + mix(lav,hot,uFlare*.6)*veins*(.42+uFlare*.8) + vec3(.5,.35,1.)*bands*.7;
-          c+=vec3(.55,.42,1.)*fr*1.5 + vec3(.35,.5,1.)*pow(fr,5.)*1.6;
+          vec3 deep=vec3(.02,.08,.14), mid=vec3(.12,.45,.62), hot=vec3(.90,.97,1.);
+          vec3 lav=vec3(.62,.85,.92);
+          vec3 c=mix(deep,mid,.5+.5*e)*.6 + mix(lav,hot,uFlare*.6)*veins*(.42+uFlare*.8) + vec3(.35,.75,.85)*bands*.7;
+          c+=vec3(.45,.85,.95)*fr*1.5 + vec3(.80,.92,1.)*pow(fr,5.)*1.5;
           float waves=pow(.5+.5*sin(length(vP.xz)*5.5+vP.y*4.-uTime*9.),5.);
           vec3 mc=uMoodCol*(.35+veins*1.1+fr*1.6+waves*(.35+uAmp*1.4));
           c=mix(c,c*.3+mc,uMood*.8);
           float a=clamp(.42+fr*.7+veins*.25+uMood*waves*.2,0.,1.);
           gl_FragColor=vec4(c*(1.+uFlare*.9),a); }` });
     this.coreMesh = new THREE.Mesh(new THREE.SphereGeometry(1.55, seg, seg / 2), this.coreMat); g.add(this.coreMesh);
-    const inner = new THREE.Mesh(new THREE.IcosahedronGeometry(.78, 1), new THREE.MeshBasicMaterial({ color: 0xf5f3ff, wireframe: true, transparent: true, opacity: .55, toneMapped: false }));
+    const inner = new THREE.Mesh(new THREE.IcosahedronGeometry(.78, 1), new THREE.MeshBasicMaterial({ color: 0xcfe8ff, wireframe: true, transparent: true, opacity: .55, toneMapped: false }));
     this.coreInner = inner; g.add(inner);
-    const cage = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(2.05, 1)), new THREE.LineBasicMaterial({ color: 0x818cf8, transparent: true, opacity: .22, blending: THREE.AdditiveBlending, depthWrite: false }));
+    const cage = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(2.05, 1)), new THREE.LineBasicMaterial({ color: 0x4a717d, transparent: true, opacity: .28, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.cage = cage; g.add(cage);
-    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: 0x8b5cf6, transparent: true, opacity: .4, blending: THREE.AdditiveBlending, depthWrite: false }));
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: 0x5fd4e8, transparent: true, opacity: .4, blending: THREE.AdditiveBlending, depthWrite: false }));
     halo.scale.setScalar(10); this.coreHalo = halo; g.add(halo);
     this.gyro = [];
-    const ringDefs = [[2.6, .025, 0xc4b5fd, [Math.PI / 2, 0, 0], [.0, .0, .45]], [3.05, .018, 0x818cf8, [Math.PI / 3, Math.PI / 5, 0], [.32, .0, -.2]], [3.5, .014, 0xe879f9, [-Math.PI / 4, 0, Math.PI / 6], [-.18, .26, 0]]];
+    const ringDefs = [[2.6, .025, 0x5fd4e8, [Math.PI / 2, 0, 0], [.0, .0, .45]], [3.05, .018, 0x99ced9, [Math.PI / 3, Math.PI / 5, 0], [.32, .0, -.2]], [3.5, .014, 0xe8dcb0, [-Math.PI / 4, 0, Math.PI / 6], [-.18, .26, 0]]];
     for (const [rad, tube, col, rot, spd] of ringDefs) {
       const m = new THREE.Mesh(new THREE.TorusGeometry(rad, tube, 8, 220), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: .9, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false }));
       m.rotation.set(...rot); m.userData.spd = spd; g.add(m); this.gyro.push(m);
@@ -272,18 +277,28 @@ export class Deck {
       bead.scale.setScalar(.6); bead.position.x = rad; m.add(bead);
     }
     // instanced tick ring
-    const ticks = 140, tg = new THREE.BoxGeometry(.018, .16, .018), tm = new THREE.MeshBasicMaterial({ color: 0xa78bfa, transparent: true, opacity: .22, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false });
+    const ticks = 140, tg = new THREE.BoxGeometry(.018, .16, .018), tm = new THREE.MeshBasicMaterial({ color: 0x5fd4e8, transparent: true, opacity: .24, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false });
     const ti = this.ticks = new THREE.InstancedMesh(tg, tm, ticks); const d = new THREE.Object3D();
     for (let i = 0; i < ticks; i++) { const a = i / ticks * Math.PI * 2; d.position.set(Math.cos(a) * 4.1, 0, Math.sin(a) * 4.1); d.rotation.set(0, -a, 0); d.scale.y = i % 10 === 0 ? 2.4 : (i % 5 === 0 ? 1.5 : 1); d.updateMatrix(); ti.setMatrixAt(i, d.matrix); }
     ti.position.y = -1.9; g.add(ti);
+    const scanMat = new THREE.MeshBasicMaterial({ color: 0x5fd4e8, transparent: true, opacity: .3, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    this.scans = new THREE.Group();
+    for (let i = 0; i < 3; i++) {
+      const line = new THREE.Mesh(new THREE.BoxGeometry(8.2, .01, .01), scanMat.clone());
+      line.position.x = 5.2;
+      const wrap = new THREE.Group(); wrap.rotation.y = i * 2.15 + .4; wrap.add(line);
+      wrap.userData.spd = .035 * (i % 2 ? 1 : -1);
+      this.scans.add(wrap);
+    }
+    this.scans.position.y = -1.85; g.add(this.scans);
     // data motes orbiting the core
     const n = this.tierName === "low" ? 260 : 700, pos = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) { const a = Math.random() * Math.PI * 2, r = 2.2 + Math.random() * 2.6, y = (Math.random() - .5) * .9 * (1 - (r - 2.2) / 3); pos.set([Math.cos(a) * r, y, Math.sin(a) * r], i * 3); }
     const mg = new THREE.BufferGeometry(); mg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    this.motes = new THREE.Points(mg, new THREE.PointsMaterial({ size: .07, map: this.glowTex, color: 0xc4b5fd, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, toneMapped: false }));
+    this.motes = new THREE.Points(mg, new THREE.PointsMaterial({ size: .07, map: this.glowTex, color: 0x99ced9, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, toneMapped: false }));
     g.add(this.motes);
     // shockwave pool
-    this.shockMat = thin => new THREE.MeshBasicMaterial({ map: thin ? this.ringTexThin : this.ringTex, color: 0xc084fc, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+    this.shockMat = thin => new THREE.MeshBasicMaterial({ map: thin ? this.ringTexThin : this.ringTex, color: 0x5fd4e8, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
     // core hit target + label
     const hit = new THREE.Mesh(new THREE.SphereGeometry(2.3, 12, 12), new THREE.MeshBasicMaterial({ visible: false })); hit.userData.idx = 0; g.add(hit);
     this.hits = [hit];
@@ -302,7 +317,7 @@ export class Deck {
     const crew = this.roster.slice(1), N = crew.length;
     this.orbitR = 8.6;
     const pts = []; for (let i = 0; i <= 256; i++) { const a = i / 256 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * this.orbitR, 0, Math.sin(a) * this.orbitR)); }
-    this.orbitLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x8b5cf6, transparent: true, opacity: .13, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.orbitLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x4a717d, transparent: true, opacity: .2, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.orbitPlane = new THREE.Group(); this.orbitPlane.rotation.set(.06, 0, -.05); this.orbitPlane.add(this.orbitLine); this.scene.add(this.orbitPlane);
     crew.forEach((bot, k) => {
       const col = new THREE.Color(bot.color), grp = new THREE.Group();
@@ -324,7 +339,7 @@ export class Deck {
     const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: this.tierName === "high" ? 4 : 0 });
     const comp = this.composer = new EffectComposer(r, rt);
     comp.addPass(new RenderPass(this.scene, this.camera));
-    const bloom = this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), this.tierName === "low" ? .5 : .6, .45, .78);
+    const bloom = this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), this.tierName === "low" ? .58 : .7, .52, .7);
     const origSet = bloom.setSize.bind(bloom), sc = this.tier.bloomScale; bloom.setSize = (w, h) => origSet(Math.max(64, Math.round(w * sc)), Math.max(64, Math.round(h * sc)));
     comp.addPass(bloom); if (/nobloom/.test(location.search)) bloom.enabled = false; comp.addPass(new OutputPass());
     this.finish = new ShaderPass({ uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uRes: { value: new THREE.Vector2(1, 1) }, uGrain: { value: this.tierName === "low" ? .035 : .05 } },
@@ -335,7 +350,7 @@ export class Deck {
           vec2 off=d*r2*.012; vec3 c; c.r=texture2D(tDiffuse,vUv+off).r; c.g=texture2D(tDiffuse,vUv).g; c.b=texture2D(tDiffuse,vUv-off).b;
           float vig=smoothstep(.95,.18,r2*1.9); c*=mix(.42,1.,vig);
           float g=h(vUv*uRes+fract(uTime*7.1)*vec2(91.,37.))-.5; c+=g*uGrain;
-          c+=vec3(.012,.006,.03)*(1.-vig);
+          c+=vec3(.006,.016,.03)*(1.-vig);
           gl_FragColor=vec4(c,1.); }` });
     comp.addPass(this.finish);
   }
@@ -407,7 +422,7 @@ export class Deck {
   }
   fire(i, dir = "out") {
     if (i == null || i < 1 || i > this.nodes.length) return;
-    const n = this.nodes[i - 1], color = dir === "out" ? n.bot.color : "#e9d5ff";
+    const n = this.nodes[i - 1], color = dir === "out" ? n.bot.color : "#b2d4d9";
     const m = this.makeBeamMeshes(color); this.beams.push({ i, dir, t0: performance.now(), m, done: false, hit: false });
     if (dir === "out") this.flareCore(.6);
   }
@@ -417,9 +432,9 @@ export class Deck {
     for (const i of want) if (!this.links.has(i) || this.links.get(i).fading) { const old = this.links.get(i); if (old) this.disposeBeam(old.m); this.links.set(i, { m: this.makeBeamMeshes(this.nodes[i - 1].bot.color), t0: performance.now(), fading: 0 }); }
   }
   disposeBeam(m) { for (const o of [m.outer, m.inner, m.packet]) { this.scene.remove(o); o.material.dispose(); } }
-  flareCore(k = 1) { this.coreFlare = Math.min(1.6, (this.coreFlare || 0) + k); this.floorMat.uniforms.uPulseT.value = this.time; this.shock(new THREE.Vector3(0, -1.9, 0), "#c084fc", 7); }
+  flareCore(k = 1) { this.coreFlare = Math.min(1.6, (this.coreFlare || 0) + k); this.floorMat.uniforms.uPulseT.value = this.time; this.shock(new THREE.Vector3(0, -1.9, 0), "#5fd4e8", 7); }
   shock(pos, color, size) { const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.shockMat()); m.material.color = new THREE.Color(color); m.rotation.x = -Math.PI / 2; m.position.copy(pos); this.scene.add(m); this.flares.push({ m, t0: performance.now(), size }); }
-  setMood(kind) { this.moodKind = kind || null; const col = { listening: 0xff3b5c, speaking: 0x22d3ee, thinking: 0xa855f7 }[kind]; if (col != null) this.coreMat.uniforms.uMoodCol.value.set(col); }
+  setMood(kind) { this.moodKind = kind || null; const col = { listening: 0xff4d6a, speaking: 0x5fd4e8, thinking: 0x2a9df4 }[kind]; if (col != null) this.coreMat.uniforms.uMoodCol.value.set(col); }
   setLevel(x) { this.levelIn = Math.max(0, Math.min(1, x || 0)); }
   intake() { this.flareCore(1); } // local acknowledgement when a message is queued
   intro() {
@@ -474,7 +489,7 @@ export class Deck {
     const mk = this.moodKind ? (this.moodKind === "thinking" ? .55 : 1) : 0; this.moodK = (this.moodK || 0) + (mk - (this.moodK || 0)) * Math.min(1, ds * 4);
     const lvT = this.moodKind === "thinking" ? .25 + .2 * Math.sin(t * 6) : (this.levelIn || 0); this.amp = (this.amp || 0) + (lvT - (this.amp || 0)) * Math.min(1, ds * (lvT > (this.amp || 0) ? 18 : 5)); this.levelIn = (this.levelIn || 0) * Math.pow(.02, ds);
     const cu = this.coreMat.uniforms; cu.uMood.value = this.moodK; cu.uAmp.value = this.amp;
-    if (!this._hb) { this._hb = new THREE.Color(0x8b5cf6); this._lb = new THREE.Color(0xa78bfa); }
+    if (!this._hb) { this._hb = new THREE.Color(0x5fd4e8); this._lb = new THREE.Color(0x99ced9); }
     this.coreHalo.material.color.copy(this._hb).lerp(cu.uMoodCol.value, this.moodK * .85); this.coreLight.color.copy(this._lb).lerp(cu.uMoodCol.value, this.moodK * .8);
     if (this.moodK > .5 && this.amp > .45 && now - (this._lastPulse || 0) > 650) { this._lastPulse = now; this.floorMat.uniforms.uPulseT.value = t; }
     const pulse = 1 + Math.sin(t * 1.6) * .025 + cf * .08 + this.amp * this.moodK * .09; this.coreMesh.scale.setScalar(pulse);
@@ -482,7 +497,7 @@ export class Deck {
     this.coreHalo.material.opacity = .32 + .06 * Math.sin(t * 1.6) + cf * .3 + (this.moodK || 0) * (.12 + (this.amp || 0) * .3); this.coreHalo.scale.setScalar(9.5 + cf * 3 + (this.hover === 0 ? 1 : 0));
     this.coreLight.intensity = 40 + 14 * Math.sin(t * 1.6) + cf * 100;
     const gk = 1 + (this.moodK || 0) * (1.5 + (this.amp || 0) * 4); this.gyro.forEach(g => { const s = g.userData.spd.map(v => v * gk); g.rotation.x += s[0] * ds * mo; g.rotation.y += s[1] * ds * mo; g.rotation.z += s[2] * ds * mo; });
-    this.ticks.rotation.y = -t * .06 * mo; this.motes.rotation.y = t * .18 * mo;
+    this.ticks.rotation.y = -t * .06 * mo; this.motes.rotation.y = t * .18 * mo; if (this.scans) this.scans.children.forEach(sc => { sc.rotation.y += sc.userData.spd * ds * mo; });
     // nodes
     const tmp = new THREE.Vector3();
     this.nodes.forEach((n, k) => {
