@@ -202,7 +202,9 @@ details summary{cursor:pointer;color:var(--lav);font-size:13px;margin-top:12px}
 
 /* voice picker (kept at the top of Settings so it is reachable on a phone) */
 #voiceSec{padding-top:4px}
-#vHint{margin:0 0 8px;font-size:12.5px;line-height:1.45}
+#vHint,#vSpoke,#vEngineHint{margin:0 0 8px;font-size:12.5px;line-height:1.45}
+#vSpoke{color:var(--ind2)}
+#vEngineHint{color:var(--mute)}
 #settings .sheet{-webkit-overflow-scrolling:touch;max-height:calc(100% - 24px - var(--safe-t) - var(--safe-b));margin:calc(8px + var(--safe-t)) auto calc(8px + var(--safe-b))}
 #settings label select,#vSel{color-scheme:dark}
 #vTest{min-height:40px}

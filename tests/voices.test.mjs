@@ -1,5 +1,5 @@
 // node tests/voices.test.mjs  — checks British voice ranking and auto-pick
-import { isBritish, isEnglish, voiceScore, partitionVoices, pickBestVoice } from "../voices.js";
+import { isBritish, isEnglish, voiceScore, partitionVoices, pickBestVoice, findSavedVoice, utteranceLangFor, applyVoiceToUtterance, describeVoice } from "../voices.js";
 
 let fail = 0, pass = 0;
 const eq = (got, want, label) => { if (got === want) pass++; else { fail++; console.log("FAIL", label || "", "\n  got:  " + got + "\n  want: " + want); } };
@@ -51,6 +51,20 @@ eq(gb[0].name, sonia.name, "British group lists natural voices first");
 ok(gb.map(v => v.name).includes("Daniel") && gb.map(v => v.name).includes("Google UK English Female"), "British group includes Daniel and Google UK");
 ok(other.every(v => !isBritish(v)) && other.some(v => v.name === "Google US English"), "other English group has no British voices");
 ok(!gb.some(v => v.name === "Thomas") && !other.some(v => v.name === "Thomas"), "non-English voices are omitted");
+
+eq(utteranceLangFor({ name: "Daniel", lang: "en_GB" }), "en_GB", "use the voice's own lang, including underscore");
+eq(utteranceLangFor({ name: "Google UK English Female", lang: "en-GB" }), "en-GB", "keep hyphenated lang");
+eq(utteranceLangFor(null), "en-GB", "fallback lang when no voice");
+const u = applyVoiceToUtterance({ lang: "" }, { name: "Daniel", lang: "en_GB", voiceURI: "android-daniel" });
+eq(u.lang, "en_GB", "applyVoiceToUtterance does not force en-GB");
+eq(u.voice && u.voice.name, "Daniel", "voice object is attached");
+eq(u.voiceURI, "android-daniel", "voiceURI is copied");
+const u2 = applyVoiceToUtterance({ lang: "" }, null);
+eq(u2.lang, "en-GB", "no voice still uses en-GB");
+eq(findSavedVoice([sonia, daniel], "Daniel").name, "Daniel", "findSavedVoice by name");
+eq(findSavedVoice([sonia, daniel], "missing"), null, "findSavedVoice misses cleanly");
+eq(describeVoice(sonia).name, sonia.name, "describeVoice name");
+eq(describeVoice(null).lang, "en-GB", "describeVoice empty lang fallback");
 
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

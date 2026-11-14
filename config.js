@@ -25,4 +25,4 @@ export const ROUTER = { tz: "Europe/London", days: [1, 2, 3, 4, 5], hours: [0, 6
 // Live polling interval (ms) and the label sent as X-Second-Brain-Agent on writes.
 export const POLL_MS = 45000;
 export const WRITE_AGENT = "Jarvis - Command Deck";
-export const VERSION = "2.6.11";
+export const VERSION = "2.6.12";

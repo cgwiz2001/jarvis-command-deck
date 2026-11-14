@@ -61,3 +61,34 @@ export function pickBestVoice(list, saved) {
   }
   return best;
 }
+
+export function findSavedVoice(list, saved) {
+  if (!saved) return null;
+  const src = Array.isArray(list) ? list : [];
+  return src.find(v => v.voiceURI === saved || v.name === saved) || null;
+}
+
+// Android Chrome often reports en_GB (underscore). Hardcoding en-GB on the
+// utterance can make Chrome ignore utterance.voice and fall back to a default.
+export function utteranceLangFor(voice) {
+  return (voice && voice.lang) ? voice.lang : "en-GB";
+}
+
+export function applyVoiceToUtterance(u, voice) {
+  if (!u) return u;
+  if (voice) {
+    u.voice = voice;
+    try { if (voice.voiceURI) u.voiceURI = voice.voiceURI; } catch {}
+  }
+  u.lang = utteranceLangFor(voice);
+  return u;
+}
+
+export function describeVoice(voice) {
+  if (!voice) return { name: "", lang: "en-GB", localService: null };
+  return {
+    name: voice.name || "",
+    lang: voice.lang || "",
+    localService: voice.localService == null ? null : !!voice.localService
+  };
+}

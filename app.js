@@ -1,8 +1,8 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=2611";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2611";
-import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2611";
-import { partitionVoices, pickBestVoice } from "./voices.js?v=2611";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=2612";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2612";
+import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2612";
+import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice } from "./voices.js?v=2612";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -754,15 +754,35 @@ async function flushHistory() {
 const TTS = { gen: 0, timer: null, lastB: 0, safety: null, resume: null, unlocked: false };
 const synth = window.speechSynthesis || null;
 function voices() { try { return synth ? synth.getVoices() : []; } catch { return []; } }
-function pickVoice() { return pickBestVoice(voices(), LS.get("jcd.voice")); }
+function pickVoice() {
+  // Always re-read getVoices() so a saved URI/name maps to a live voice object after voiceschanged.
+  return pickBestVoice(voices(), LS.get("jcd.voice"));
+}
 function unlockSpeech() {
   if (!synth || TTS.unlocked) return;
   try {
     const u = new SpeechSynthesisUtterance(" ");
-    u.volume = 0; u.rate = 1; u.lang = "en-GB";
+    u.volume = 0; u.rate = 1;
+    applyVoiceToUtterance(u, pickVoice());
     synth.speak(u); synth.cancel();
     TTS.unlocked = true;
   } catch { }
+}
+function reportSpokenVoice(v) {
+  const el = $("vSpoke");
+  if (!el) return;
+  const d = describeVoice(v);
+  if (!v) {
+    el.textContent = "Last spoken with the browser default. No matching voice object was found. Language set to en-GB.";
+  } else {
+    const where = d.localService === true ? "localService: yes (this device)" : d.localService === false ? "localService: no (network)" : "localService: unknown";
+    el.textContent = "Last spoken with " + d.name + " · " + (d.lang || "unknown language") + " · " + where + ".";
+  }
+  const hint = $("vEngineHint");
+  if (hint) {
+    hint.hidden = !isAndroid;
+    if (isAndroid) hint.textContent = "On Android, Chrome often lists several English names but plays only the one system voice from the phone's Text-to-speech settings. If every choice sounds the same, that is the device, not the picker.";
+  }
 }
 document.addEventListener("pointerdown", unlockSpeech, { capture: true, passive: true });
 document.addEventListener("touchend", unlockSpeech, { capture: true, passive: true });
@@ -774,7 +794,8 @@ function speak(text, onDone) {
   if (!synth || !spoken) { done(); return; }
   stopSpeaking(true); try { synth.resume(); } catch { } const g = ++TTS.gen, parts = chunks(spoken), v = pickVoice(), rate = +(LS.get("jcd.rate") || 1);
   setMode("speaking");
-  parts.forEach((p, idx) => { const u = new SpeechSynthesisUtterance(p); if (v) u.voice = v; u.lang = "en-GB"; u.rate = rate; u.pitch = .95;
+  reportSpokenVoice(v);
+  parts.forEach((p, idx) => { const u = new SpeechSynthesisUtterance(p); applyVoiceToUtterance(u, v); u.rate = rate; u.pitch = .95;
     u.onboundary = () => { TTS.lastB = performance.now(); deck && deck.setLevel(.75 + Math.random() * .25); };
     u.onend = () => { if (g === TTS.gen && idx === parts.length - 1) done(); };
     u.onerror = ev => { if (g === TTS.gen && idx === parts.length - 1 && ev.error !== "interrupted" && ev.error !== "canceled") done(); };
@@ -886,6 +907,11 @@ function settingsVoice() {
     else if (!gb.length) hint.textContent = "No British English voice was found on this device yet. Other English voices are listed below, and the picker will update if a British voice appears.";
     else hint.textContent = "British English voices are listed first, with the more natural ones at the top. Automatic uses the most natural British voice this device offers. Your choice is saved on this device.";
   }
+  const engine = $("vEngineHint");
+  if (engine) {
+    engine.hidden = !isAndroid;
+    if (isAndroid) engine.textContent = "On Android, Chrome often lists several English names but plays only the one system voice from the phone's Text-to-speech settings. If every choice sounds the same, that is the device, not the picker.";
+  }
 }
 $("xkSave").onclick = () => { const v = $("xkIn").value.trim(); if (!v) return; LS.set("jarvis.key", v); $("xkIn").value = ""; settingsVoice(); renderNote(); renderDialog(); };
 $("xkForget").onclick = () => { LS.del("jarvis.key"); settingsVoice(); $("xkState").textContent = "Key forgotten on this device (this also removes it from the Jarvis HUD here)."; renderNote(); renderDialog(); };
@@ -907,7 +933,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=2611");
+      const { Deck } = await import("./scene.js?v=2612");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
