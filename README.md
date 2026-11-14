@@ -23,3 +23,5 @@ A standalone 3D command centre for a crew of Grok Bots. You talk only to **Jarvi
 - Crew labels show each bot's current name and role from Second Brain (falling back to the roster), and on-screen dates and times use forms such as 14 November 2026 and 12:25 pm (v2.6.6).
 - The mic button asks Chrome for microphone access first, so the installed app shows a real allow prompt and clear guidance if access is blocked (v2.6.7).
 - Crew labels use the renamed bots (Dashboard Bot, Finance Bot, Marketing Bot, Email Bot, Data and Files Bot, Business Bot, PC Health Bot), even when a status line still carries an old name (v2.6.8).
+- Fixed stale caches so label updates always load after a release (v2.6.9).
+- Dates, times and numbers that bots write in their own status lines and replies are shown naturally, such as "Saturday 14 November at around 6:25 am" and "9:57 pm", with GMT/UTC converted to London time and the zone label dropped. Version numbers, IDs, references, money, mileage and HTTP codes stay as written on screen and are read aloud naturally by the voice (v2.6.10). Test: `node tests/naturalize-text.test.mjs`.

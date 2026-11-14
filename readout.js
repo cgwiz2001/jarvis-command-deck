@@ -321,6 +321,185 @@ function weekName(tok) {
   return i >= 0 ? WEEKDAYS[i] : tok;
 }
 
+// ----- bot-authored text: natural dates, times and safe numbers (v2.6.10) -----
+const MON_FULL = { jan:0,january:0,feb:1,february:1,mar:2,march:2,apr:3,april:3,may:4,jun:5,june:5,jul:6,july:6,aug:7,august:7,sep:8,sept:8,september:8,oct:9,october:9,nov:10,november:10,dec:11,december:11 };
+// Month and weekday tokens must be capitalised ("2 May", not "2 may be"), so ordinary words never read as dates.
+const CAP_MONTH = "(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec)";
+const CAP_WEEK = "(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Tues|Thurs|Thur|Sun|Mon|Tue|Wed|Thu|Fri|Sat)";
+const APPROX = "(~|≈|c\\.\\s*|ca\\.\\s*|approx\\.?\\s+|about\\s+|around\\s+)?";
+const ZONE = "(?:\\s*(GMT|UTC|BST|Z\\b|London(?:\\s+time)?))?";
+const NUM_WORD_MAX = 10;
+
+function londonParts(d) {
+  const parts = {};
+  new Intl.DateTimeFormat("en-GB", { timeZone: TZ, weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+    .formatToParts(d).forEach(x => { parts[x.type] = x.value; });
+  return { weekday: parts.weekday, day: Number(parts.day), month: parts.month, year: Number(parts.year), hour: Number(parts.hour), minute: Number(parts.minute) };
+}
+function clockText(h, m, showMinutes = true) {
+  const hh = ((Number(h) % 24) + 24) % 24;
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  const ap = hh < 12 ? "am" : "pm";
+  return showMinutes ? h12 + ":" + String(Number(m) || 0).padStart(2, "0") + " " + ap : h12 + " " + ap;
+}
+function approxWord(a) { return a ? "around " : ""; }
+function isUtcZone(z) { return /^(GMT|UTC|Z)$/i.test(String(z || "").trim()); }
+// Hour in 24h from a written clock; returns null when the clock is impossible.
+function hour24(hh, ap) {
+  let h = Number(hh);
+  if (!isFinite(h)) return null;
+  if (ap) {
+    if (h < 1 || h > 12) return null;
+    const pm = /^p/i.test(ap);
+    return h === 12 ? (pm ? 12 : 0) : h + (pm ? 12 : 0);
+  }
+  return h <= 23 ? h : null;
+}
+
+/**
+ * Rewrite dates and times in bot-written text into Peter's natural forms
+ * ("Saturday 14 November at around 6:25 am"), converting GMT/UTC/Z to Europe/London
+ * and dropping the zone label. Version numbers, IDs, hashes, reference numbers,
+ * money, mileage and HTTP codes are left exactly as written on screen.
+ * opts.speech: give protected tokens a spoken form (used by naturalize()).
+ * opts.park: a parking function from naturalize(), so results are not re-read as numbers.
+ */
+export function naturalizeText(text, opts = {}) {
+  if (text == null) return "";
+  let s = String(text);
+  if (!s) return s;
+  const now = opts.now instanceof Date ? opts.now : new Date(opts.now || Date.now());
+  const speech = !!opts.speech;
+  const own = [];
+  const park = typeof opts.park === "function" ? opts.park : (val => { own.push(val); return "\uE002" + "o".repeat(own.length) + "\uE003"; });
+  const nowLondon = londonParts(now);
+  const curYear = nowLondon.year;
+
+  // 1. links stay untouched on screen
+  if (!speech) s = s.replace(/\bhttps?:\/\/[^\s)>\]]+/gi, all => park(all));
+
+  // 2. ISO timestamps / ISO dates -> "14 November 2026 at 10:34 am" (same as the deck's own dates)
+  s = s.replace(/\b(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)(Z|[+-]\d{2}:?\d{2})?\b/g, (all, d, t, z) => {
+    const w = formatWhen(d + "T" + t + (z || "Z"));
+    return w ? park(w) : all;
+  });
+  s = s.replace(/\b(\d{4})-(\d{2})-(\d{2})\b(?![-\w])/g, (all, y, mo, d) => {
+    const m = Number(mo) - 1, day = Number(d);
+    if (m < 0 || m > 11 || day < 1 || day > 31) return all;
+    return park(day + " " + MONTHS[m] + (Number(y) === curYear && opts.dropYear ? "" : " " + y));
+  });
+
+  // 3. protected tokens: left exactly as written on screen, given a spoken form for the voice
+  const digitWords = d => String(d).split("").map(c => ONES[Number(c)]).join(" ");
+  // version numbers and version ranges (v1.8.141–v1.8.159, v4.0.106)
+  s = s.replace(/\bv\d+(?:\.\d+)*(?:\s*[–-]\s*v?\d+(?:\.\d+)*)?\b/gi, all => park(speech
+    ? all.split(/\s*[–-]\s*/).map(v => versionToWords(/^v/i.test(v) ? v : "v" + v)).join(" to ")
+    : all));
+  // money with a country prefix or code (US$236.35, A$10, 25 GBP); plain £/$/€ amounts are kept on screen too
+  s = s.replace(/(^|[^\w$£€])((?:US|AU|A|C|CA|NZ|HK|S)?[£$€])\s?(\d[\d,]*(?:\.\d+)?)(\s?(?:k|m|bn|b)\b)?/g, (all, pre, sym, num, scale) => {
+    if (!speech) return pre + park(sym + num + (scale || ""));
+    const words = currencyToWords(sym.replace(/^[A-Z]+/, "") + num + (scale ? scale.trim() : ""));
+    return pre + park(words || (sym + num));
+  });
+  s = s.replace(/\b(\d[\d,]*(?:\.\d+)?)\s?(GBP|USD|EUR)\b/g, (all, num, code) => park(speech ? (currencyToWords(code + num) || all) : all));
+  // mileage / distance
+  s = s.replace(/\b(\d[\d,]*(?:\.\d+)?)\s?(mi|miles?|km|kilomet(?:re|er)s?)\b/g, (all, num, u) => park(speech
+    ? decimalToWords(num) + " " + (/^k/i.test(u) ? "kilometres" : (num === "1" ? "mile" : "miles"))
+    : all));
+  // HTTP status codes
+  s = s.replace(/\bHTTP\s?(\d{3})\b/gi, (all, code) => park(speech ? "HTTP " + digitWords(code).replace(/zero/g, "oh") : all));
+  // phone / reference numbers: leading zero, or six or more bare digits
+  s = s.replace(/(^|[^\w.,£$€:-])(0\d{3,}|\d{6,})(?![\w.,:]*\d)(?![\w])/g, (all, pre, num) => pre + park(speech ? digitWords(num) : num));
+  // IDs, hashes and product codes: any word mixing letters and digits (5e77322, MT5, rmwgdst97, UtilityPC-2, Covid-19)
+  s = s.replace(/\b[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*\b/g, all => {
+    const segs = all.split(/[-_]/);
+    const mixed = segs.some(g => /[A-Za-z]/.test(g) && /\d/.test(g) && !/^\d+(?:st|nd|rd|th|am|pm|[ap]|k|m|bn|b|t|s|ms|px|h|hrs?|mins?|d|x|gb|mb|tb|kb|mi|km)$/i.test(g));
+    const letterThenDigit = segs.length > 1 && segs.some((g, k) => k > 0 && /^\d+$/.test(g) && /[A-Za-z]$/.test(segs[k - 1]));
+    if (!mixed && !letterThenDigit) return all;
+    if (/^\d{1,2}(?:am|pm)$/i.test(all)) return all;
+    return park(speech ? all.replace(/[-_]/g, " ") : all);
+  });
+
+  // 4. dates, optionally with weekday, day range, year and a time
+  const timePart = "(?:[, ]+(?:at\\s+)?" + APPROX + "(\\d{1,2})(?=:[0-5]\\d|\\s*[ap]\\.?m\\b)(?::([0-5]\\d))?(?::[0-5]\\d)?\\s*([ap]\\.?m\\.?)?" + ZONE + ")?";
+  const dayFirst = new RegExp("\\b(?:(" + CAP_WEEK + ")[, ]+)?(\\d{1,2})(?:st|nd|rd|th)?(?:\\s*[–-]\\s*(\\d{1,2})(?:st|nd|rd|th)?)?\\s+(?:of\\s+)?(" + CAP_MONTH + ")(?![a-z])(?:,?\\s+(\\d{4}))?(?!\\d)" + timePart, "g");
+  const renderDate = (week, day, day2, mon, year, approx, hh, mm, ap, zone, all) => {
+    const m = MON_FULL[String(mon).replace(/\.$/, "").toLowerCase()];
+    const d = Number(day);
+    if (m == null || d < 1 || d > 31 || (day2 && (Number(day2) < 1 || Number(day2) > 31))) return null;
+    let timeOk = hh != null && (mm != null || ap);
+    let h = timeOk ? hour24(hh, ap) : null;
+    if (timeOk && h == null) timeOk = false;
+    let weekOut = week ? weekName(String(week).replace(/\.$/, "")) : "";
+    let dayOut = d, monOut = MONTHS[m], yearOut = year || "", clock = "";
+    if (timeOk) {
+      if (isUtcZone(zone)) {
+        const y = year ? Number(year) : curYear;
+        const lp = londonParts(new Date(Date.UTC(y, m, d, h, Number(mm || 0))));
+        if (!day2) { dayOut = lp.day; monOut = lp.month; if (week) weekOut = lp.weekday; if (year) yearOut = String(lp.year); }
+        h = lp.hour; mm = String(lp.minute);
+      }
+      clock = approxWord(approx) + clockText(h, mm || 0, mm != null);
+    }
+    let out = (weekOut ? weekOut + " " : "") + dayOut + (day2 ? " to " + Number(day2) : "") + " " + monOut + (yearOut ? " " + yearOut : "");
+    if (clock) out += " at " + clock;
+    return { out, timeOk };
+  };
+  s = s.replace(dayFirst, (all, week, day, day2, mon, year, approx, hh, mm, ap, zone) => {
+    const r = renderDate(week, day, day2, mon, year, approx, hh, mm, ap, zone, all);
+    if (!r) return all;
+    return park(r.out);
+  });
+  const monthFirst = new RegExp("\\b(?:(" + CAP_WEEK + ")[, ]+)?(" + CAP_MONTH + ")\\s+(\\d{1,2})(?:st|nd|rd|th)?(?!\\d)(?![.:]\\d)(?:,?\\s+(\\d{4}))?\\b", "g");
+  s = s.replace(monthFirst, (all, week, mon, day, year) => {
+    const r = renderDate(week, day, null, mon, year, null, null, null, null, null, all);
+    return r ? park(r.out) : all;
+  });
+  s = s.replace(new RegExp("\\b(" + CAP_MONTH + ")\\s+(\\d{4})\\b", "g"), (all, mon, year) => {
+    const m = MON_FULL[String(mon).replace(/\.$/, "").toLowerCase()];
+    return m == null ? all : park(MONTHS[m] + " " + year);
+  });
+
+  // 5. clocks on their own
+  const toLondonClock = (h, mm, zone) => {
+    if (!isUtcZone(zone)) return { h, mm };
+    const lp = londonParts(new Date(Date.UTC(nowLondon.year, now.getUTCMonth(), now.getUTCDate(), h, Number(mm || 0))));
+    return { h: lp.hour, mm: String(lp.minute) };
+  };
+  s = s.replace(new RegExp("(^|[^\\w.:])" + APPROX + "(\\d{1,2})(?::([0-5]\\d))?(?::[0-5]\\d)?\\s*([ap])\\.?m\\b\\.?" + ZONE, "gi"), (all, pre, approx, hh, mm, ap, zone) => {
+    const h = hour24(hh, ap + "m");
+    if (h == null) return all;
+    const c = toLondonClock(h, mm, zone);
+    return pre + park(approxWord(approx) + clockText(c.h, c.mm || 0, mm != null));
+  });
+  s = s.replace(new RegExp("(^|[^\\w.:])" + APPROX + "([01]?\\d|2[0-3]):([0-5]\\d)(?::[0-5]\\d)?(?![\\d:.])" + ZONE, "g"), (all, pre, approx, hh, mm, zone) => {
+    const c = toLondonClock(Number(hh), mm, zone);
+    return pre + park(approxWord(approx) + clockText(c.h, c.mm, true));
+  });
+
+  // 6. weekday abbreviations on their own ("Sat morning" -> "Saturday morning")
+  s = s.replace(/\b(Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)\b(?![-'’\w])/g, (all, w) => park(weekName(w)));
+
+  // 7. approximate marker before a number ("~8 GB" -> "around 8 GB")
+  s = s.replace(/~\s*(?=\d)/g, "around ");
+
+  // 8. on screen, small counts read as words ("7 messages" -> "seven messages"), as elsewhere on the deck
+  if (!speech) {
+    s = s.replace(/(^|[\s(])(\d{1,2})(?=\s+[a-z][a-z'-]*\b)/g, (all, pre, n) => {
+      const v = Number(n);
+      if (v > NUM_WORD_MAX || (n.length > 1 && n[0] === "0")) return all;
+      return pre + numberToWords(v);
+    });
+  }
+  // number ranges read as "to" in speech ("30–40 seconds" -> "30 to 40 seconds")
+  if (speech) s = s.replace(/(^|[\s(])(\d+(?:\.\d+)?)\s*[–-]\s*(\d+(?:\.\d+)?)(?![\w.])/g, "$1$2 to $3");
+  // "#51" -> "number 51" in speech
+  if (speech) s = s.replace(/(^|[\s(])#(\d+)\b/g, "$1number $2");
+
+  if (own.length) s = s.replace(/\uE002(o+)\uE003/g, (_, o) => own[o.length - 1] ?? "");
+  return s;
+}
+
 export function naturalize(text) {
   if (text == null) return "";
   let s = String(text);
@@ -329,6 +508,7 @@ export function naturalize(text) {
   const park = val => { slots.push(val); return "\uE000" + "o".repeat(slots.length) + "\uE001"; };
 
   s = s.replace(/\bhttps?:\/\/[^\s)>\]]+/gi, () => park("a web link"));
+  s = naturalizeText(s, { speech: true, park });
 
   s = s.replace(/\(?\b(\d{4}-\d{2}-\d{2}T[0-9:.+-]+Z?)\b\)?/g, (all, iso) => {
     const w = formatWhen(iso);
@@ -372,7 +552,7 @@ export function naturalize(text) {
 
   s = s.replace(/\b([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?:\s*(GMT|BST|UTC))?\b/g, (all, hh, mm, zone) => park(clockFromHm(hh, mm, zone)));
 
-  s = s.replace(/\b(\d+(?:,\d{3})*)\s*(ms|milliseconds?|px|pixels?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?)\s+ago\b/gi, (all, n, u) => {
+  s = s.replace(/\b(\d+(?:,\d{3})*)\s*(ms|milliseconds?|px|pixels?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?)\s+ago\b/g, (all, n, u) => {
     const pair = UNIT_WORDS[u.toLowerCase()];
     if (!pair) return all;
     const v = Number(String(n).replace(/,/g, ""));
@@ -381,7 +561,7 @@ export function naturalize(text) {
     return park(v + " " + unit + " ago");
   });
 
-  s = s.replace(/\b(\d+(?:,\d{3})*(?:\.\d+)?)\s*(ms|milliseconds?|px|pixels?|secs?|seconds?|mins?|minutes?|hrs?|hours?|days?)\b/gi, (all, n, u) => {
+  s = s.replace(/\b(\d+(?:,\d{3})*(?:\.\d+)?)\s*(ms|milliseconds?|px|pixels?|secs?|seconds?|mins?|minutes?|hrs?|hours?|days?)\b/g, (all, n, u) => {
     const pair = UNIT_WORDS[u.toLowerCase()];
     if (!pair) return all;
     const parsed = splitNumberString(n);
@@ -390,7 +570,7 @@ export function naturalize(text) {
     return park(unitCount(Number(parsed.intPart), pair[0], pair[1]));
   });
 
-  s = s.replace(/\b(\d+)(ms|px|s)\b/gi, (all, n, u) => {
+  s = s.replace(/\b(\d+)(ms|px|s)\b/g, (all, n, u) => {
     const pair = UNIT_WORDS[u.toLowerCase()];
     return pair ? park(unitCount(n, pair[0], pair[1])) : all;
   });

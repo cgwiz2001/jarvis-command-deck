@@ -1,7 +1,7 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=268";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=268";
-import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=268";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=2610";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2610";
+import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2610";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -94,7 +94,7 @@ function displayOf(i) {
   const name = stale ? (b.name || parsed.name) : parsed.name;
   const fieldRole = String(s.role || "").trim();
   const meaningful = fieldRole && !/^role\s*unknown$/i.test(fieldRole);
-  const title = parsed.role || (meaningful ? fieldRole : "") || b.title || "";
+  const title = naturalizeText(parsed.role || (meaningful ? fieldRole : "") || b.title || "");
   return { name, title };
 }
 
@@ -180,7 +180,7 @@ function ingest() {
       if (cur === "routed" && bi > 0) { deck && deck.fire(bi, "out"); toast(`Jarvis has sent a request on to <b>${esc(displayOf(bi).name)}</b>.`); }
       if (cur === "answered") { if (bi > 0) { if (prev !== "routed") deck && deck.fire(bi, "out"); setTimeout(() => deck && deck.fire(bi, "in"), prev !== "routed" ? 2400 : 0); }
         else deck && deck.flareCore(1);
-        const raw = String(r.reply || ""), snippet = naturalize(raw.slice(0, 120));
+        const raw = String(r.reply || ""), snippet = naturalizeText(raw.slice(0, 120));
         toast(`<b>${esc(bi >= 0 ? displayOf(bi).name : "Jarvis")}</b> answered: ${esc(snippet)}${raw.length > 120 ? "…" : ""}`, 6500); }
       if (cur === "new" && prev === undefined && !S.justSent?.has(r.id)) deck && deck.intake();
     }
@@ -195,7 +195,7 @@ function renderLink() {
   const p = $("linkPill"), t = $("linkTxt");
   let cls = "", txt = "Linking to Second Brain…", title = p.title || "";
   if (!token()) { txt = "Not linked yet"; title = "Open Settings to link Second Brain."; }
-  else if (S.err) { cls = "err"; txt = S.err === "no token" ? "Not linked yet" : "There's a problem with the link"; title = "Second Brain: " + naturalize(S.err); }
+  else if (S.err) { cls = "err"; txt = S.err === "no token" ? "Not linked yet" : "There's a problem with the link"; title = "Second Brain: " + naturalizeText(S.err); }
   else if (S.at) {
     cls = "live";
     const clock = formatClock(new Date(S.at), { withZone: true });
@@ -228,15 +228,15 @@ function renderFeed() {
   el._lastKey = key;
   const top = scroller ? scroller.scrollTop : 0;
   if (!token() || errMsg) {
-    el.innerHTML = `<div class="empty"><b>${!token() ? "The uplink is offline" : "There's a problem with the link"}</b>${!token() ? "Add your Second Brain token in Settings to see Jarvis's inbox and the crew's live status." : "The deck can't reach Second Brain just now (" + esc(naturalize(S.err)) + "). It will retry automatically."}<div style="margin-top:14px"><button class="btn" data-open="settings">Open settings</button></div></div>`;
+    el.innerHTML = `<div class="empty"><b>${!token() ? "The uplink is offline" : "There's a problem with the link"}</b>${!token() ? "Add your Second Brain token in Settings to see Jarvis's inbox and the crew's live status." : "The deck can't reach Second Brain just now (" + esc(naturalizeText(S.err)) + "). It will retry automatically."}<div style="margin-top:14px"><button class="btn" data-open="settings">Open settings</button></div></div>`;
   } else if (!list.length) {
     el.innerHTML = `<div class="empty"><b>Standing by</b>There are no requests in the inbox yet. Brief Jarvis below when you're ready.</div>`;
   } else {
     el.innerHTML = list.map(r => { const bi = botIndex(r.routedTo), c = bi >= 0 ? ROSTER[bi].color : "#5fd4e8";
       const name = bi >= 0 ? displayOf(bi).name : (r.routedTo || "");
-      return `<div class="card ${S.freshIds.has(r.id) ? "fresh" : ""}" data-id="${esc(r.id || "")}" style="--c:${c}"><div class="t">${esc(naturalize(r.text))}</div>${stepper(r.status)}
+      return `<div class="card ${S.freshIds.has(r.id) ? "fresh" : ""}" data-id="${esc(r.id || "")}" style="--c:${c}"><div class="t">${esc(naturalizeText(r.text))}</div>${stepper(r.status)}
         <div class="meta">${narrationHtml(r, name, esc)}</div>
-        ${r.reply ? `<div class="reply">${esc(naturalize(r.reply))}</div>` : ""}</div>`; }).join("");
+        ${r.reply ? `<div class="reply">${esc(naturalizeText(r.reply))}</div>` : ""}</div>`; }).join("");
   }
   if (scroller) scroller.scrollTop = top;
 }
@@ -322,8 +322,8 @@ function messagesForBot(i) {
   return out;
 }
 function messageItemHtml(r, name) {
-  const ask = r && r.text ? `<div class="dmsg-ask">${esc(naturalize(r.text))}</div>` : "";
-  const reply = r && r.reply ? `<div class="dmsg-reply">${esc(naturalize(r.reply))}</div>` : "";
+  const ask = r && r.text ? `<div class="dmsg-ask">${esc(naturalizeText(r.text))}</div>` : "";
+  const reply = r && r.reply ? `<div class="dmsg-reply">${esc(naturalizeText(r.reply))}</div>` : "";
   return `<article class="dmsg" data-mid="${esc(r && r.id || "")}">${ask}<div class="sm">${messageTimingHtml(r, name, esc)}</div>${reply}</article>`;
 }
 function bindDossierScrollGuard() {
@@ -350,7 +350,7 @@ function renderDossier() {
   el._lastKey = key;
   el._lastBot = i;
   const note = s
-    ? esc(naturalize(s.note || "There's no status note for this bot just now."))
+    ? esc(naturalizeText(s.note || "There's no status note for this bot just now."))
     : (token() ? "There's no status line for this bot in Second Brain yet." : "Link Second Brain in Settings to see live status.");
   const list = msgs.length
     ? msgs.map(r => messageItemHtml(r, d.name)).join("")
@@ -414,7 +414,7 @@ $("tokSave").onclick = () => { const v = $("tokIn").value.trim(); if (!v) return
 $("tokForget").onclick = () => { LS.del("jcd.tok"); $("tokState").textContent = tokenSource() === "hud" ? "Deck token forgotten. The HUD's token on this device is still used." : "Token forgotten."; S.inbox = []; S.bots = []; S.at = 0; lastPollSig = null; ingest(); renderAll(); if (token()) poll(); };
 $("connSave").onclick = () => { const o = { base: $("cBase").value.trim(), set: $("cSet").value.trim(), inbox: $("cInbox").value.trim(), status: $("cStatus").value.trim(), hist: $("cHist").value.trim(), style: $("cStyle").value.trim() }; D.style = null;
   if (o.base && !okBase(o.base)) { $("connState").textContent = "API base must be an https:// URL."; return; } LS.set("jcd.conn", JSON.stringify(o)); $("connState").textContent = "Saved on this device."; lastPollSig = null; poll(); };
-$("connTest").onclick = async () => { $("connState").textContent = "Testing the Second Brain link…"; try { const c = conn(); await sbGet(c.status); await sbGet(c.inbox); $("connState").textContent = "The link is working: both notes are readable."; } catch (e) { $("connState").textContent = "The link failed: " + naturalize(e.message); } };
+$("connTest").onclick = async () => { $("connState").textContent = "Testing the Second Brain link…"; try { const c = conn(); await sbGet(c.status); await sbGet(c.inbox); $("connState").textContent = "The link is working: both notes are readable."; } catch (e) { $("connState").textContent = "The link failed: " + naturalizeText(e.message); } };
 $("qSel").onchange = e => { LS.set("jcd.quality", e.target.value); toast("Reloading with the new visual quality…", 1500); setTimeout(() => location.reload(), 700); };
 $("motionChk").onchange = e => { LS.set("jcd.reduced", e.target.checked ? "1" : "0"); setTimeout(() => location.reload(), 300); };
 
@@ -450,7 +450,7 @@ const DEV = LS.get("jcd.dev") || (() => { const d = (mobileQ.matches ? "Phone-" 
 const D = { log: [], hist: [], mode: null, talk: false, interim: "", style: null, styleAt: 0, thinking: false, quietMisses: 0 };
 try { D.log = JSON.parse(LS.get("jcd.dialog") || "[]") || []; } catch {}
 function saveLog() { D.log = D.log.slice(-60); LS.set("jcd.dialog", JSON.stringify(D.log)); }
-function addMsg(who, text, extra) { const raw = String(text || ""); const m = Object.assign({ id: rid(), who, text: who === "me" ? raw : naturalize(raw), at: new Date().toISOString() }, extra || {}); D.log.push(m); saveLog(); renderDialog(); return m; }
+function addMsg(who, text, extra) { const raw = String(text || ""); const m = Object.assign({ id: rid(), who, text: who === "me" ? raw : naturalizeText(raw), at: new Date().toISOString() }, extra || {}); D.log.push(m); saveLog(); renderDialog(); return m; }
 
 // ----- dialogue rendering -----
 function bubble(m) {
@@ -800,7 +800,7 @@ async function ensureMic() {
     if (n === "NotAllowedError" || n === "SecurityError") toast("The microphone is blocked for the Command Deck. Open the app menu, choose Site settings, set Microphone to Allow, then reopen the app.", 7000);
     else if (n === "NotFoundError" || n === "OverconstrainedError") toast("No microphone was found. Check that one is plugged in and set as the default input.", 6000);
     else if (n === "NotReadableError") toast("Another app is using the microphone right now.", 5000);
-    else toast("The microphone isn't available: " + esc(naturalize((e && e.message) || String(n))));
+    else toast("The microphone isn't available: " + esc(naturalizeText((e && e.message) || String(n))));
     return false;
   }
 }
@@ -813,13 +813,13 @@ async function listen() {
   r.onstart = () => { setMode("listening"); $("micBtn").classList.add("rec"); startMeter(); };
   r.onsoundstart = () => deck && deck.setLevel(.4);
   r.onresult = ev => { let f = "", it = ""; for (let i = 0; i < ev.results.length; i++) { const x = ev.results[i]; if (x.isFinal) f += x[0].transcript; else it += x[0].transcript; } fin = f; D.interim = (f + " " + it).trim(); if (!meter) deck && deck.setLevel(.55 + Math.random() * .35); renderDialog(); };
-  r.onerror = ev => { err = ev.error; if (!["aborted", "no-speech"].includes(ev.error)) toast(ev.error === "not-allowed" ? (micOk = false, "The microphone is blocked for the Command Deck. Open the app menu, choose Site settings, set Microphone to Allow, then reopen the app.") : "The microphone had a problem: " + esc(naturalize(ev.error))); };
+  r.onerror = ev => { err = ev.error; if (!["aborted", "no-speech"].includes(ev.error)) toast(ev.error === "not-allowed" ? (micOk = false, "The microphone is blocked for the Command Deck. Open the app menu, choose Site settings, set Microphone to Allow, then reopen the app.") : "The microphone had a problem: " + esc(naturalizeText(ev.error))); };
   r.onend = () => { const txt = (fin || D.interim).trim(); rec = null; $("micBtn").classList.remove("rec"); stopMeter(); D.interim = ""; setMode(null); renderDialog();
     if (txt) { D.quietMisses = 0; converse(txt, true); return; }
     if (D.talk && err === "no-speech" && ++D.quietMisses < 3) { setTimeout(() => D.talk && !rec && !D.mode && listen(), 300); return; }
     if (D.talk && (err === "no-speech" || err === "not-allowed" || err === "audio-capture")) { setTalk(false); addMsg("sys", err === "no-speech" ? "Talk mode paused: I didn't hear anything." : "Talk mode stopped: the microphone isn't available."); }
   };
-  try { r.start(); } catch (e) { rec = null; toast("The microphone isn't available: " + esc(naturalize(e.message))); }
+  try { r.start(); } catch (e) { rec = null; toast("The microphone isn't available: " + esc(naturalizeText(e.message))); }
 }
 function stopListening(abort) { if (!rec) return; try { abort ? rec.abort() : rec.stop(); } catch { } }
 function setTalk(on) {
@@ -867,7 +867,7 @@ $("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" :
 $("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
 $("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
 setInterval(() => { if (!S.suspended && histQ.length) flushHistory(); }, 30000);
-window.__talk = { converse, parseReply, inferHandoff, inferUserHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D, poll, naturalize, numberToWords, ago, formatClock, formatDate, formatWhen, refreshAgo, renderLink, systemPrompt, crewBrief, inboxBrief, messagesForBot, renderDossier, displayOf, parseStatusName, botIndex };
+window.__talk = { converse, parseReply, inferHandoff, inferUserHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D, poll, naturalize, naturalizeText, numberToWords, ago, formatClock, formatDate, formatWhen, refreshAgo, renderLink, systemPrompt, crewBrief, inboxBrief, messagesForBot, renderDossier, displayOf, parseStatusName, botIndex };
 
 // ---------- boot (called by the PIN lock after unlock; not on page load) ----------
 export async function boot() {
@@ -877,7 +877,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=268");
+      const { Deck } = await import("./scene.js?v=2610");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
