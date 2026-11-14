@@ -789,14 +789,30 @@ async function startMeter() {
   } catch { }
 }
 function stopMeter() { if (!meter) return; cancelAnimationFrame(meter.raf); meter.st.getTracks().forEach(t => t.stop()); meter.ac.close().catch(() => { }); meter = null; }
-function listen() {
-  if (!SRc || rec || convBusy) return; stopSpeaking(true);
+// Ask Chrome for the mic explicitly first, so an installed app gets a real allow prompt instead of a silent "not-allowed" from speech recognition.
+let micOk = false, micAsking = false;
+async function ensureMic() {
+  if (micOk || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return true;
+  try { const st = await navigator.mediaDevices.getUserMedia({ audio: true }); st.getTracks().forEach(t => t.stop()); micOk = true; return true; }
+  catch (e) {
+    const n = e && e.name;
+    if (n === "NotAllowedError" || n === "SecurityError") toast("The microphone is blocked for the Command Deck. Open the app menu, choose Site settings, set Microphone to Allow, then reopen the app.", 7000);
+    else if (n === "NotFoundError" || n === "OverconstrainedError") toast("No microphone was found. Check that one is plugged in and set as the default input.", 6000);
+    else if (n === "NotReadableError") toast("Another app is using the microphone right now.", 5000);
+    else toast("The microphone isn't available: " + esc(naturalize((e && e.message) || String(n))));
+    return false;
+  }
+}
+async function listen() {
+  if (!SRc || rec || convBusy || micAsking) return;
+  if (!micOk) { micAsking = true; const ok = await ensureMic(); micAsking = false; if (!ok) { if (D.talk) { setTalk(false); addMsg("sys", "Talk mode stopped: the microphone isn't available."); } return; } if (rec || convBusy) return; }
+  stopSpeaking(true);
   const r = rec = new SRc(); r.lang = "en-GB"; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
   let fin = "", err = ""; D.interim = "";
   r.onstart = () => { setMode("listening"); $("micBtn").classList.add("rec"); startMeter(); };
   r.onsoundstart = () => deck && deck.setLevel(.4);
   r.onresult = ev => { let f = "", it = ""; for (let i = 0; i < ev.results.length; i++) { const x = ev.results[i]; if (x.isFinal) f += x[0].transcript; else it += x[0].transcript; } fin = f; D.interim = (f + " " + it).trim(); if (!meter) deck && deck.setLevel(.55 + Math.random() * .35); renderDialog(); };
-  r.onerror = ev => { err = ev.error; if (!["aborted", "no-speech"].includes(ev.error)) toast(ev.error === "not-allowed" ? "The microphone permission is blocked." : "The microphone had a problem: " + esc(naturalize(ev.error))); };
+  r.onerror = ev => { err = ev.error; if (!["aborted", "no-speech"].includes(ev.error)) toast(ev.error === "not-allowed" ? (micOk = false, "The microphone is blocked for the Command Deck. Open the app menu, choose Site settings, set Microphone to Allow, then reopen the app.") : "The microphone had a problem: " + esc(naturalize(ev.error))); };
   r.onend = () => { const txt = (fin || D.interim).trim(); rec = null; $("micBtn").classList.remove("rec"); stopMeter(); D.interim = ""; setMode(null); renderDialog();
     if (txt) { D.quietMisses = 0; converse(txt, true); return; }
     if (D.talk && err === "no-speech" && ++D.quietMisses < 3) { setTimeout(() => D.talk && !rec && !D.mode && listen(), 300); return; }
