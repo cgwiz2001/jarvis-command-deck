@@ -258,9 +258,10 @@ function digitsUnit(n, singular, plural) {
   return v + " " + unit;
 }
 
-export function ago(iso) {
+export function ago(iso, now = Date.now()) {
   if (!iso) return "";
-  const s = (Date.now() - new Date(iso)) / 1000;
+  const t = now instanceof Date ? now.getTime() : Number(now);
+  const s = (t - new Date(iso)) / 1000;
   if (!isFinite(s)) return "";
   if (Math.abs(s) < 45) return "just now";
   if (Math.abs(s) < 3600) return digitsUnit(Math.max(1, Math.round(Math.abs(s) / 60)), "minute") + " ago";

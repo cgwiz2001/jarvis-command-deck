@@ -1,9 +1,10 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=2614";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2614";
-import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2614";
-import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2614";
-import { inboxFlowEvents, statusFlowEvents, botStatusSig, seenSnapshot } from "./flow.js?v=2614";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION, USAGE_NOTE_ID } from "./config.js?v=2615";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2615";
+import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2615";
+import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2615";
+import { inboxFlowEvents, statusFlowEvents, botStatusSig, seenSnapshot } from "./flow.js?v=2615";
+import { parseUsage, usageTone, usagePercentLabel, usageRingOffset, usageHeadline, usageDetailText, isUsageStale } from "./usage.js?v=2615";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -20,7 +21,7 @@ function conn() {
   let own = {}; try { own = JSON.parse(LS.get("jcd.conn") || "{}") || {}; } catch {}
   const h = hudCfg();
   const pick = (a, b) => (a && String(a).trim()) || (b && String(b).trim()) || "";
-  return { base: pick(own.base, h.sbBase).replace(/\/+$/, ""), set: pick(own.set, h.sbSet), inbox: pick(own.inbox, h.sbInbox), status: pick(own.status, h.sbStatus), hist: pick(own.hist, h.sbHist), style: pick(own.style, h.sbStyle),
+  return { base: pick(own.base, h.sbBase).replace(/\/+$/, ""), set: pick(own.set, h.sbSet), inbox: pick(own.inbox, h.sbInbox), status: pick(own.status, h.sbStatus), hist: pick(own.hist, h.sbHist), style: pick(own.style, h.sbStyle), usage: pick(own.usage, h.sbUsage) || USAGE_NOTE_ID,
     fromHud: !own.base && !!h.sbBase };
 }
 function token() { return LS.get("jcd.tok") || LS.get("jarvis.sbtok") || ""; }
@@ -103,7 +104,7 @@ function displayOf(i) {
 // ---------- time (natural-language helpers live in readout.js) ----------
 
 // ---------- state ----------
-const S = { inbox: [], bots: [], botByIdx: {}, at: 0, err: null, polling: false, selected: null, firstPoll: true, freshIds: new Set(), suspended: false };
+const S = { inbox: [], bots: [], botByIdx: {}, at: 0, err: null, polling: false, selected: null, firstPoll: true, freshIds: new Set(), suspended: false, usage: null, usageErr: null };
 let deck = null;
 let seen = {}; try { seen = JSON.parse(LS.get("jcd.seen") || "{}") || {}; } catch {}
 let seenBots = {}; try { seenBots = JSON.parse(LS.get("jcd.seenBots") || "{}") || {}; } catch {}
@@ -125,19 +126,33 @@ function refreshAgo() {
     const next = ago(el.dataset.ago);
     if (el.textContent !== next) el.textContent = next;
   });
+  renderUsage();
 }
 async function pollOnce() {
   if (S.suspended) return;
   const c = conn();
   S.polling = true;
   try {
-    const [a, b] = await Promise.all([sbGet(c.status), sbGet(c.inbox)]);
+    const usageP = c.usage
+      ? sbGet(c.usage).then(res => ({ ok: true, res })).catch(err => ({ ok: false, err }))
+      : Promise.resolve(null);
+    const [a, b, ures] = await Promise.all([sbGet(c.status), sbGet(c.inbox), usageP]);
     const st = sbJson(a.n.markdown), ib = sbJson(b.n.markdown);
     const nextBots = Array.isArray(st.bots) ? st.bots : [];
     const nextInbox = Array.isArray(ib.requests) ? ib.requests : [];
-    const nextSig = JSON.stringify([nextBots, nextInbox]);
+    let nextUsage = S.usage, nextUsageErr = S.usageErr;
+    if (ures && ures.ok) {
+      try {
+        const parsed = parseUsage(sbJson(ures.res.n.markdown));
+        if (parsed) { nextUsage = parsed; nextUsageErr = null; }
+        else nextUsageErr = "bad";
+      } catch { nextUsageErr = "bad"; }
+    } else if (ures && !ures.ok) {
+      nextUsageErr = "missing";
+    }
+    const nextSig = JSON.stringify([nextBots, nextInbox, nextUsage, nextUsageErr]);
     const changed = nextSig !== lastPollSig || S.err !== null;
-    S.bots = nextBots; S.inbox = nextInbox; S.at = Date.now(); S.err = null; backoff = 0;
+    S.bots = nextBots; S.inbox = nextInbox; S.usage = nextUsage; S.usageErr = nextUsageErr; S.at = Date.now(); S.err = null; backoff = 0;
     S.polling = false;
     if (changed) {
       lastPollSig = nextSig;
@@ -241,6 +256,47 @@ function renderLink() {
   t.textContent = txt;
   p.title = title;
 }
+
+function setUsageTip(open) {
+  const tip = $("usageTip"), btn = $("usageBtn");
+  if (!tip || !btn) return;
+  const show = !!open && !btn.hidden && !!S.usage;
+  tip.hidden = !show;
+  btn.setAttribute("aria-expanded", show ? "true" : "false");
+}
+function renderUsage() {
+  const btn = $("usageBtn"), tip = $("usageTip"), pctEl = $("usagePct"), agoEl = $("usageAgo"), arc = $("usageArc"), detail = $("usageDetail");
+  if (!btn) return;
+  const u = S.usage;
+  if (!u) {
+    btn.hidden = true;
+    setUsageTip(false);
+    return;
+  }
+  const now = new Date();
+  const headline = usageHeadline(u);
+  const pct = usagePercentLabel(u.weeklyPercentUsed);
+  const tone = usageTone(u.weeklyPercentUsed);
+  const age = u.checkedAt ? ago(u.checkedAt, now) : "";
+  const stale = isUsageStale(u.checkedAt, now) || !!S.usageErr;
+  const detailText = usageDetailText(u, now);
+  btn.hidden = false;
+  btn.classList.toggle("ok", tone === "ok");
+  btn.classList.toggle("warn", tone === "warn");
+  btn.classList.toggle("high", tone === "high");
+  btn.classList.toggle("stale", stale);
+  if (pctEl && pctEl.textContent !== (pct ? pct + "%" : "—")) pctEl.textContent = pct ? pct + "%" : "—";
+  if (agoEl) {
+    const agoTxt = age && age !== "just now" ? "Checked " + age : "";
+    if (agoEl.textContent !== agoTxt) agoEl.textContent = agoTxt;
+  }
+  if (arc) arc.style.strokeDashoffset = String(usageRingOffset(u.weeklyPercentUsed));
+  const label = headline + (age && age !== "just now" ? ", checked " + age : "");
+  if (btn.getAttribute("aria-label") !== label) btn.setAttribute("aria-label", label);
+  if (detail && detail.textContent !== detailText) detail.textContent = detailText;
+  if (tip && !tip.hidden && !u) setUsageTip(false);
+}
+
 function stepper(status) {
   const k = { new: 0, routed: 1, answered: 2 }[status] ?? 0;
   return `<div class="steps">${[0, 1, 2].map(i => `<i class="${i <= k ? "on" : ""} ${i === k && k < 2 ? "cur" : ""}"></i>`).join("")}</div>
@@ -402,7 +458,7 @@ function renderDossier() {
   }
   $("briefBtn").onclick = () => { const inp = $("cmdIn"); inp.value = i === 0 ? "" : `For ${d.name}: `; inp.focus(); if (mobileQ.matches) closeLeft(); };
 }
-function renderAll() { renderLink(); renderFeed(); renderCrew(); renderRouter(); renderDossier(); shift(); if (typeof renderNote === "function" && !D.mode) renderNote(); }
+function renderAll() { renderLink(); renderUsage(); renderFeed(); renderCrew(); renderRouter(); renderDossier(); shift(); if (typeof renderNote === "function" && !D.mode) renderNote(); }
 
 // ---------- selection & panels ----------
 function select(i) { S.selected = i; if (deck) deck.select(i, true); if (i != null && mobileQ.matches) closeLeft(); renderCrew(); renderDossier(); shift(); }
@@ -421,13 +477,20 @@ const toggleLeft = tab => { const L = $("left"); if (L.classList.contains("open"
 $("feedBtn").onclick = () => toggleLeft("feed"); $("crewBtn").onclick = () => toggleLeft("crew"); $("talkTabBtn").onclick = () => toggleLeft("talk");
 $("leftClose").onclick = closeLeft; $("dossClose").onclick = () => select(null);
 $("linkPill").onclick = () => token() ? poll() : openSettings();
+$("usageBtn").onclick = e => { e.stopPropagation(); setUsageTip($("usageTip").hidden); };
+document.addEventListener("click", e => {
+  if ($("usageTip") && !$("usageTip").hidden && !e.target.closest("#usageTip, #usageBtn")) setUsageTip(false);
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") setUsageTip(false); });
+
 
 S.justSent = new Set();
 // ---------- settings ----------
 function openSettings() {
+  setUsageTip(false);
   const c = conn(), src = tokenSource();
   $("tokState").textContent = src === "deck" ? "A token is saved on this device (hidden)." : src === "hud" ? "Using the Jarvis HUD's token on this device (hidden). Save one here to override." : "No token saved. Paste your Second Brain token to link the deck.";
-  $("tokIn").value = ""; $("cBase").value = c.base; $("cSet").value = c.set; $("cInbox").value = c.inbox; $("cStatus").value = c.status; $("cHist").value = c.hist; $("cStyle").value = c.style; settingsVoice();
+  $("tokIn").value = ""; $("cBase").value = c.base; $("cSet").value = c.set; $("cInbox").value = c.inbox; $("cStatus").value = c.status; $("cUsage").value = c.usage; $("cHist").value = c.hist; $("cStyle").value = c.style; settingsVoice();
   $("connState").textContent = c.fromHud ? "Filled in from the Jarvis HUD on this device." : (c.base ? "Saved on this device." : "Enter the API base, context set and the two note ids.");
   $("connDet").open = !c.base; $("qSel").value = LS.get("jcd.quality") || "auto"; $("motionChk").checked = LS.get("jcd.reduced") === "1";
   $("verTag").textContent = "This is Command Deck " + versionToWords(VERSION) + (deck ? ", running at the " + deck.tierName + " render tier." : ".");
@@ -439,8 +502,8 @@ function openSettings() {
 $("setBtn").onclick = openSettings; $("setClose").onclick = () => $("settings").hidden = true;
 $("settings").addEventListener("click", e => { if (e.target.id === "settings") $("settings").hidden = true; });
 $("tokSave").onclick = () => { const v = $("tokIn").value.trim(); if (!v) return; LS.set("jcd.tok", v); $("tokIn").value = ""; $("tokState").textContent = "Token saved on this device (hidden)."; S.err = null; lastPollSig = null; poll(); };
-$("tokForget").onclick = () => { LS.del("jcd.tok"); $("tokState").textContent = tokenSource() === "hud" ? "Deck token forgotten. The HUD's token on this device is still used." : "Token forgotten."; S.inbox = []; S.bots = []; S.at = 0; lastPollSig = null; ingest(); renderAll(); if (token()) poll(); };
-$("connSave").onclick = () => { const o = { base: $("cBase").value.trim(), set: $("cSet").value.trim(), inbox: $("cInbox").value.trim(), status: $("cStatus").value.trim(), hist: $("cHist").value.trim(), style: $("cStyle").value.trim() }; D.style = null;
+$("tokForget").onclick = () => { LS.del("jcd.tok"); $("tokState").textContent = tokenSource() === "hud" ? "Deck token forgotten. The HUD's token on this device is still used." : "Token forgotten."; S.inbox = []; S.bots = []; S.usage = null; S.usageErr = null; S.at = 0; lastPollSig = null; ingest(); renderAll(); if (token()) poll(); };
+$("connSave").onclick = () => { const o = { base: $("cBase").value.trim(), set: $("cSet").value.trim(), inbox: $("cInbox").value.trim(), status: $("cStatus").value.trim(), usage: $("cUsage").value.trim(), hist: $("cHist").value.trim(), style: $("cStyle").value.trim() }; D.style = null;
   if (o.base && !okBase(o.base)) { $("connState").textContent = "API base must be an https:// URL."; return; } LS.set("jcd.conn", JSON.stringify(o)); $("connState").textContent = "Saved on this device."; lastPollSig = null; poll(); };
 $("connTest").onclick = async () => { $("connState").textContent = "Testing the Second Brain link…"; try { const c = conn(); await sbGet(c.status); await sbGet(c.inbox); $("connState").textContent = "The link is working: both notes are readable."; } catch (e) { $("connState").textContent = "The link failed: " + naturalizeText(e.message); } };
 $("qSel").onchange = e => { LS.set("jcd.quality", e.target.value); toast("Reloading with the new visual quality…", 1500); setTimeout(() => location.reload(), 700); };
@@ -1079,7 +1142,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=2614");
+      const { Deck } = await import("./scene.js?v=2615");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;

@@ -7,8 +7,8 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { makeAvatar, animateAvatar } from "./avatars.js?v=2614";
-import { compactStatus } from "./readout.js?v=2614";
+import { makeAvatar, animateAvatar } from "./avatars.js?v=2615";
+import { compactStatus } from "./readout.js?v=2615";
 
 const NOISE = /* glsl */`
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
