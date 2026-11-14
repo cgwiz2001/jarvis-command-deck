@@ -1,5 +1,5 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=266";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=268";
 import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=266";
 import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=266";
 
@@ -90,7 +90,8 @@ function displayOf(i) {
   const s = S.botByIdx[i];
   if (!s) return { name: b.name || "", title: b.title || "" };
   const parsed = parseStatusName(s.name);
-  const name = parsed.name || b.name || "";
+  const stale = !parsed.name || (b.old || []).includes(parsed.name.toLowerCase());
+  const name = stale ? (b.name || parsed.name) : parsed.name;
   const fieldRole = String(s.role || "").trim();
   const meaningful = fieldRole && !/^role\s*unknown$/i.test(fieldRole);
   const title = parsed.role || (meaningful ? fieldRole : "") || b.title || "";

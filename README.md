@@ -22,3 +22,4 @@ A standalone 3D command centre for a crew of Grok Bots. You talk only to **Jarvi
 - Handoffs such as advise, ask, or tell a named crew member always queue an Inbox item, and History labels the user Peter (v2.6.5).
 - Crew labels show each bot's current name and role from Second Brain (falling back to the roster), and on-screen dates and times use forms such as 14 November 2026 and 12:25 pm (v2.6.6).
 - The mic button asks Chrome for microphone access first, so the installed app shows a real allow prompt and clear guidance if access is blocked (v2.6.7).
+- Crew labels use the renamed bots (Dashboard Bot, Finance Bot, Marketing Bot, Email Bot, Data and Files Bot, Business Bot, PC Health Bot), even when a status line still carries an old name (v2.6.8).
