@@ -1,16 +1,16 @@
 // Jarvis Command Deck service worker. Cache name is versioned with the app.
-const VERSION = "2.6.8";
+const VERSION = "2.6.9";
 const CACHE = "jcd-" + VERSION;
 const PRECACHE = [
   "./",
   "index.html",
-  "style.css?v=266",
-  "lock.js?v=266",
-  "app.js?v=266",
-  "config.js?v=266",
-  "scene.js?v=266",
-  "avatars.js?v=266",
-  "readout.js?v=266",
+  "style.css?v=268",
+  "lock.js?v=268",
+  "app.js?v=268",
+  "config.js?v=268",
+  "scene.js?v=268",
+  "avatars.js?v=268",
+  "readout.js?v=268",
   "manifest.webmanifest",
   "icon-192.png",
   "icon-512.png",
@@ -59,7 +59,9 @@ async function cacheFirst(req) {
 async function networkFirst(req) {
   const cache = await caches.open(CACHE);
   try {
-    const res = await fetch(req);
+    // Revalidate with the server so a new release never waits on the browser's HTTP cache.
+    const same = new URL(req.url).origin === self.location.origin;
+    const res = await fetch(same && req.mode !== "navigate" ? new Request(req, { cache: "no-cache" }) : req, same && req.mode === "navigate" ? { cache: "no-cache" } : undefined);
     if (res && res.ok) cache.put(req, res.clone());
     return res;
   } catch (err) {

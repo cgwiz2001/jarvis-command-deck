@@ -1,7 +1,7 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
 import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=268";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=266";
-import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=266";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=268";
+import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=268";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -877,7 +877,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=266");
+      const { Deck } = await import("./scene.js?v=268");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
