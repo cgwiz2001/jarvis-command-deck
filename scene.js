@@ -7,8 +7,8 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { makeAvatar, animateAvatar } from "./avatars.js?v=265";
-import { compactStatus } from "./readout.js?v=265";
+import { makeAvatar, animateAvatar } from "./avatars.js?v=266";
+import { compactStatus } from "./readout.js?v=266";
 
 const NOISE = /* glsl */`
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
@@ -449,6 +449,27 @@ export class Deck {
     });
     const cs = map[0] || "unknown";
     if (this.coreState !== cs) { this.coreState = cs; this.coreLabel.classList.remove("working", "waiting", "idle", "unknown"); this.coreLabel.classList.add(cs); const stEl = this.coreLabel.querySelector(".st"); if (stEl) stEl.textContent = compactStatus(cs); this.coreLabel._mkey = ""; }
+  }
+  setIdentities(map) { // map: idx -> { name, title }
+    const apply = (el, ident) => {
+      if (!el || !ident) return;
+      const nextName = String(ident.name || "").toUpperCase();
+      const nextTitle = String(ident.title || "");
+      const nEl = el.querySelector(".n"), rEl = el.querySelector(".r");
+      let changed = false;
+      if (nEl) {
+        const lead = nEl.querySelector("i");
+        const cur = (nEl.textContent || "").trim();
+        if (cur !== nextName) {
+          nEl.innerHTML = (lead ? lead.outerHTML : "<i></i>") + nextName;
+          changed = true;
+        }
+      }
+      if (rEl && rEl.textContent !== nextTitle) { rEl.textContent = nextTitle; changed = true; }
+      if (changed) el._mkey = "";
+    };
+    apply(this.coreLabel, map[0] || { name: this.roster[0].name, title: this.roster[0].title });
+    this.nodes.forEach((n, k) => apply(n.label, map[k + 1] || { name: n.bot.name, title: n.bot.title }));
   }
   // ---- beams ----
   makeBeamMeshes(color) {

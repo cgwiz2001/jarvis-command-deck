@@ -1,7 +1,7 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=265";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=265";
-import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=265";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=266";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=266";
+import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=266";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -78,6 +78,24 @@ function botIndex(nameOrRole, role) {
   return -1;
 }
 const stateOf = s => ({ online: "working", working: "working", busy: "working", waiting: "waiting", blocked: "waiting", idle: "idle" })[String(s || "").toLowerCase()] || "unknown";
+function parseStatusName(raw) {
+  const t = String(raw || "").trim();
+  if (!t) return { name: "", role: "" };
+  const parts = t.split(/\s*[·•|/]\s*|\s+[-–—:]\s+/).map(x => x.trim()).filter(Boolean);
+  if (parts.length >= 2) return { name: parts[0], role: parts.slice(1).join(" · ") };
+  return { name: t, role: "" };
+}
+function displayOf(i) {
+  const b = ROSTER[i] || {};
+  const s = S.botByIdx[i];
+  if (!s) return { name: b.name || "", title: b.title || "" };
+  const parsed = parseStatusName(s.name);
+  const name = parsed.name || b.name || "";
+  const fieldRole = String(s.role || "").trim();
+  const meaningful = fieldRole && !/^role\s*unknown$/i.test(fieldRole);
+  const title = parsed.role || (meaningful ? fieldRole : "") || b.title || "";
+  return { name, title };
+}
 
 // ---------- time (natural-language helpers live in readout.js) ----------
 
@@ -146,18 +164,23 @@ async function confirmQueued(id) {
 function ingest() {
   S.botByIdx = {}; const states = {};
   for (const b of S.bots) { const i = botIndex(b.name, b.role); if (i < 0) continue; if (!S.botByIdx[i] || new Date(b.updatedAt || 0) > new Date(S.botByIdx[i].updatedAt || 0)) { S.botByIdx[i] = b; states[i] = stateOf(b.state); } }
-  if (deck) deck.setStates(states);
+  if (deck) {
+    const idents = {};
+    for (let i = 0; i < ROSTER.length; i++) idents[i] = displayOf(i);
+    deck.setStates(states);
+    if (deck.setIdentities) deck.setIdentities(idents);
+  }
   // beams from status transitions since last seen on this device
   const first = !Object.keys(seen).length, fresh = new Set();
   for (const r of S.inbox) {
     if (!r || !r.id) continue; const prev = seen[r.id], cur = r.status, bi = botIndex(r.routedTo);
     if (!first && prev !== cur) {
       fresh.add(r.id);
-      if (cur === "routed" && bi > 0) { deck && deck.fire(bi, "out"); toast(`Jarvis has sent a request on to <b>${esc(ROSTER[bi].name)}</b>.`); }
+      if (cur === "routed" && bi > 0) { deck && deck.fire(bi, "out"); toast(`Jarvis has sent a request on to <b>${esc(displayOf(bi).name)}</b>.`); }
       if (cur === "answered") { if (bi > 0) { if (prev !== "routed") deck && deck.fire(bi, "out"); setTimeout(() => deck && deck.fire(bi, "in"), prev !== "routed" ? 2400 : 0); }
         else deck && deck.flareCore(1);
         const raw = String(r.reply || ""), snippet = naturalize(raw.slice(0, 120));
-        toast(`<b>${esc(bi >= 0 ? ROSTER[bi].name : "Jarvis")}</b> answered: ${esc(snippet)}${raw.length > 120 ? "…" : ""}`, 6500); }
+        toast(`<b>${esc(bi >= 0 ? displayOf(bi).name : "Jarvis")}</b> answered: ${esc(snippet)}${raw.length > 120 ? "…" : ""}`, 6500); }
       if (cur === "new" && prev === undefined && !S.justSent?.has(r.id)) deck && deck.intake();
     }
     seen[r.id] = cur;
@@ -194,7 +217,7 @@ function stepper(status) {
   return `<div class="steps">${[0, 1, 2].map(i => `<i class="${i <= k ? "on" : ""} ${i === k && k < 2 ? "cur" : ""}"></i>`).join("")}</div>
   <div class="slabels">${["Queued", "Routed", "Answered"].map((l, i) => `<span class="${i <= k ? "on" : ""}">${l}</span>`).join("")}</div>`;
 }
-function chip(i) { if (i < 0) return ""; const b = ROSTER[i]; return `<span class="chip" data-sel="${i}" style="--c:${b.color}">${esc(b.name)}</span>`; }
+function chip(i) { if (i < 0) return ""; const b = ROSTER[i], d = displayOf(i); return `<span class="chip" data-sel="${i}" style="--c:${b.color}">${esc(d.name)}</span>`; }
 function renderFeed() {
   const el = $("feed"), scroller = $("tab-feed");
   const errMsg = S.err && !S.inbox.length ? S.err : null;
@@ -209,7 +232,7 @@ function renderFeed() {
     el.innerHTML = `<div class="empty"><b>Standing by</b>There are no requests in the inbox yet. Brief Jarvis below when you're ready.</div>`;
   } else {
     el.innerHTML = list.map(r => { const bi = botIndex(r.routedTo), c = bi >= 0 ? ROSTER[bi].color : "#5fd4e8";
-      const name = bi >= 0 ? ROSTER[bi].name : (r.routedTo || "");
+      const name = bi >= 0 ? displayOf(bi).name : (r.routedTo || "");
       return `<div class="card ${S.freshIds.has(r.id) ? "fresh" : ""}" data-id="${esc(r.id || "")}" style="--c:${c}"><div class="t">${esc(naturalize(r.text))}</div>${stepper(r.status)}
         <div class="meta">${narrationHtml(r, name, esc)}</div>
         ${r.reply ? `<div class="reply">${esc(naturalize(r.reply))}</div>` : ""}</div>`; }).join("");
@@ -232,15 +255,15 @@ function crewSummary() {
 }
 function renderCrew() {
   const el = $("crew");
-  const dataKey = ROSTER.map((b, i) => { const s = S.botByIdx[i]; return s ? stateOf(s.state) : "unknown"; }).join("|") + "|" + Boolean(token());
+  const dataKey = ROSTER.map((b, i) => { const s = S.botByIdx[i], d = displayOf(i); return (s ? stateOf(s.state) : "unknown") + ":" + d.name + ":" + d.title; }).join("|") + "|" + Boolean(token());
   const rows = el.querySelectorAll(".crow");
   if (el._lastDataKey === dataKey && rows.length === ROSTER.length) {
     rows.forEach(row => row.classList.toggle("sel", +row.dataset.sel === S.selected));
     return;
   }
   el._lastDataKey = dataKey;
-  el.innerHTML = crewSummary() + ROSTER.map((b, i) => { const s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown";
-    return `<div class="crow ${S.selected === i ? "sel" : ""}" data-sel="${i}" style="--c:${b.color}"><div class="orb"></div><div><div class="nm">${esc(b.name)}</div><div class="rl">${esc(b.title)}</div></div><span class="st stt ${st}">${crewStatePhrase(st)}</span></div>`; }).join("");
+  el.innerHTML = crewSummary() + ROSTER.map((b, i) => { const s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown", d = displayOf(i);
+    return `<div class="crow ${S.selected === i ? "sel" : ""}" data-sel="${i}" style="--c:${b.color}"><div class="orb"></div><div><div class="nm">${esc(d.name)}</div><div class="rl">${esc(d.title)}</div></div><span class="st stt ${st}">${crewStatePhrase(st)}</span></div>`; }).join("");
 }
 function renderRouter() {
   const el = $("routerInfo"), key = Boolean(token());
@@ -314,7 +337,7 @@ function renderDossier() {
   const i = S.selected, el = $("dossier"), panel = $("right");
   bindDossierScrollGuard();
   if (i == null) { panel.classList.remove("open"); el._lastKey = ""; el._lastBot = null; return; }
-  const b = ROSTER[i], s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown";
+  const b = ROSTER[i], s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown", d = displayOf(i);
   const msgs = messagesForBot(i);
   const key = JSON.stringify([i, !!token(), s || null, msgs.map(m => [m.id, m.status, m.text, m.reply, m.repliedAt, m.createdAt, m.source])]);
   if (el._lastKey === key && panel.classList.contains("open")) { refreshAgo(); return; }
@@ -329,26 +352,26 @@ function renderDossier() {
     ? esc(naturalize(s.note || "There's no status note for this bot just now."))
     : (token() ? "There's no status line for this bot in Second Brain yet." : "Link Second Brain in Settings to see live status.");
   const list = msgs.length
-    ? msgs.map(r => messageItemHtml(r, b.name)).join("")
-    : `<div class="ln muted">There are no messages from ${esc(b.name)} yet.</div>`;
+    ? msgs.map(r => messageItemHtml(r, d.name)).join("")
+    : `<div class="ln muted">There are no messages from ${esc(d.name)} yet.</div>`;
   const routing = i === 0
     ? `<div class="dbox"><h5>Routing</h5><div class="ln">Every message you send here lands in Jarvis's inbox. Second Brain then routes it to the right bot automatically.</div></div>`
     : "";
-  el.innerHTML = `<div class="dhead"><div class="dh" style="--c:${b.color}"><div class="orb"></div><div><h3>${esc(b.name.toUpperCase())}</h3><p>${esc(b.title)}</p></div></div>
+  el.innerHTML = `<div class="dhead"><div class="dh" style="--c:${b.color}"><div class="orb"></div><div><h3>${esc(d.name.toUpperCase())}</h3><p>${esc(d.title)}</p></div></div>
     <span class="stt ${st}">${crewStatePhrase(st)}</span></div>
     <div class="dscroll">
       <div class="dbox"><h5>How things stand just now</h5><div class="ln">${note}</div>${s && s.updatedAt ? `<div class="sm">Last updated on ${esc(formatWhen(s.updatedAt))}.</div>` : ""}</div>
       ${routing}
       <div class="dbox dmsgs"><h5>Messages</h5>${list}</div>
     </div>
-    <div class="dfoot"><button class="btn dact" id="briefBtn">${i === 0 ? "Brief Jarvis" : "Ask Jarvis to brief " + esc(b.name)}</button></div>`;
+    <div class="dfoot"><button class="btn dact" id="briefBtn">${i === 0 ? "Brief Jarvis" : "Ask Jarvis to brief " + esc(d.name)}</button></div>`;
   panel.classList.add("open");
   const next = el.querySelector(".dscroll");
   if (next) {
     if (!sameBot || atTop) next.scrollTop = 0;
     else next.scrollTop = prevTop + (next.scrollHeight - prevHeight);
   }
-  $("briefBtn").onclick = () => { const inp = $("cmdIn"); inp.value = i === 0 ? "" : `For ${b.name}: `; inp.focus(); if (mobileQ.matches) closeLeft(); };
+  $("briefBtn").onclick = () => { const inp = $("cmdIn"); inp.value = i === 0 ? "" : `For ${d.name}: `; inp.focus(); if (mobileQ.matches) closeLeft(); };
 }
 function renderAll() { renderLink(); renderFeed(); renderCrew(); renderRouter(); renderDossier(); shift(); if (typeof renderNote === "function" && !D.mode) renderNote(); }
 
@@ -488,15 +511,15 @@ async function loadStyle() {
 }
 function crewBrief() {
   return ROSTER.slice(1).map((b, k) => {
-    const s = S.botByIdx[k + 1];
-    if (!s) return b.name + ", " + b.title + ", has no live status signal just now.";
+    const s = S.botByIdx[k + 1], d = displayOf(k + 1);
+    if (!s) return d.name + ", " + d.title + ", has no live status signal just now.";
     const stPhrase = { working: "is working", waiting: "is waiting", idle: "is idle", unknown: "has no clear status" }[stateOf(s.state)] || "has no clear status";
     const note = String(s.note || "").trim();
     const spokenNote = note ? naturalize(note) : "";
     const when = s.updatedAt ? ", as of " + formatWhen(s.updatedAt) : "";
     return spokenNote
-      ? (b.name + ", " + b.title + ", " + stPhrase + when + ": " + spokenNote + ".")
-      : (b.name + ", " + b.title + ", " + stPhrase + when + ".");
+      ? (d.name + ", " + d.title + ", " + stPhrase + when + ": " + spokenNote + ".")
+      : (d.name + ", " + d.title + ", " + stPhrase + when + ".");
   }).join(" ");
 }
 function inboxBrief() {
@@ -683,7 +706,7 @@ async function converse(text, spoken) {
     D.thinking = false;
     let reply = res.reply || "Understood.", route = null;
     if (res.route) {
-      const i = res.route.i, name = ROSTER[i].name; deck && deck.fire(i, "out"); route = { i, ok: false };
+      const i = res.route.i, name = displayOf(i).name; deck && deck.fire(i, "out"); route = { i, ok: false };
       if (!token()) reply = [withoutHandoffClaim(reply), "Second Brain isn't linked on this device, so " + name + " hasn't got it yet."].filter(Boolean).join(" ");
       else try { const item = await sbAppend(res.route.task || text, name); markSent(item); route.ok = true; route.id = item.id;
           route.confirmed = await confirmQueued(item.id);
@@ -700,7 +723,7 @@ function markSent(item) { S.justSent.add(item.id); seen[item.id] = "new"; LS.set
 
 // ----- History note logging (same entry format as the HUD) -----
 const hEsc = x => String(x || "").replace(/\s+/g, " ").trim().replace(/[\\`*_#<>\[\]|~]/g, "\\$&").replace(/^([-+=]|\d+\.)/, "\\$1");
-const hWhen = t => { const p = {}; new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "short" }).formatToParts(new Date(t)).forEach(x => p[x.type] = x.value); return `${p.weekday} ${p.day} ${p.month} ${p.year}, ${p.hour}:${p.minute} ${p.timeZoneName}`; };
+const hWhen = t => { const date = formatDate(t), clock = formatClock(t, { withZone: true }); return date && clock ? date + ", " + clock : (date || clock || ""); };
 const histQ = [];
 async function logHistory(q, a) {
   if (!pref("hist", true) || keyish(q + " " + a)) return;
@@ -827,7 +850,7 @@ $("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" :
 $("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
 $("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
 setInterval(() => { if (!S.suspended && histQ.length) flushHistory(); }, 30000);
-window.__talk = { converse, parseReply, inferHandoff, inferUserHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D, poll, naturalize, numberToWords, ago, formatClock, formatWhen, refreshAgo, renderLink, systemPrompt, crewBrief, inboxBrief, messagesForBot, renderDossier };
+window.__talk = { converse, parseReply, inferHandoff, inferUserHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D, poll, naturalize, numberToWords, ago, formatClock, formatDate, formatWhen, refreshAgo, renderLink, systemPrompt, crewBrief, inboxBrief, messagesForBot, renderDossier, displayOf, parseStatusName, botIndex };
 
 // ---------- boot (called by the PIN lock after unlock; not on page load) ----------
 export async function boot() {
@@ -837,7 +860,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=265");
+      const { Deck } = await import("./scene.js?v=266");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;

@@ -209,23 +209,25 @@ export function versionToWords(ver) {
   return "version " + s.split(".").map(p => numberToWords(Number(p))).join(" point ");
 }
 
-function clockFromHm(h, min, zone) {
-  const hh = Number(h), mm = Number(min);
-  let clock;
-  if (hh === 0 && mm === 0) clock = "midnight";
-  else if (hh === 12 && mm === 0) clock = "midday";
-  else {
-    const h12 = hh % 12 === 0 ? 12 : hh % 12;
-    const hourW = numberToWords(h12);
-    if (mm === 0) clock = hourW + " o'clock";
-    else if (mm < 10) clock = hourW + " oh " + numberToWords(mm);
-    else clock = hourW + " " + numberToWords(mm);
-  }
-  const z = zone ? " " + String(zone).toUpperCase() : "";
-  return clock + z;
+function zoneLabel(z) {
+  const t = String(z || "").trim();
+  if (!t) return "";
+  if (/BST|British Summer/i.test(t)) return "BST";
+  if (/GMT|UTC|Universal|Greenwich/i.test(t)) return "GMT";
+  return t.replace(/^GMT[+-].*/i, "GMT").toUpperCase();
 }
 
-export function formatClock(isoOrDate, { withZone = true } = {}) {
+function clockFromHm(h, min, zone) {
+  const hh = ((Number(h) % 24) + 24) % 24;
+  const mm = Math.max(0, Math.min(59, Number(min) || 0));
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  const ampm = hh < 12 ? "am" : "pm";
+  const clock = h12 + ":" + String(mm).padStart(2, "0") + " " + ampm;
+  const z = zoneLabel(zone);
+  return z ? clock + " " + z : clock;
+}
+
+export function formatClock(isoOrDate, { withZone = false } = {}) {
   const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
   if (isNaN(d)) return "";
   const parts = {};
@@ -233,18 +235,27 @@ export function formatClock(isoOrDate, { withZone = true } = {}) {
   return clockFromHm(parts.hour, parts.minute, withZone ? (parts.timeZoneName || "") : "");
 }
 
-export function formatWhen(isoOrDate, { withYear } = {}) {
+export function formatDate(isoOrDate, { withYear = true } = {}) {
   const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
   if (isNaN(d)) return "";
   const parts = {};
-  new Intl.DateTimeFormat("en-GB", { timeZone: TZ, weekday: "long", day: "numeric", month: "long", year: "numeric" }).formatToParts(d).forEach(x => { parts[x.type] = x.value; });
-  const dayN = Number(parts.day);
-  const ordinal = ORDINALS[dayN] || numberToWords(dayN);
-  const nowYear = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, year: "numeric" }).format(new Date());
-  const includeYear = withYear === true || (withYear !== false && parts.year !== nowYear);
-  const date = (parts.weekday ? parts.weekday + " the " : "the ") + ordinal + " of " + parts.month + (includeYear ? ", " + numberToWords(Number(parts.year)) : "");
-  const clock = formatClock(d, { withZone: true });
+  new Intl.DateTimeFormat("en-GB", { timeZone: TZ, day: "numeric", month: "long", year: "numeric" }).formatToParts(d).forEach(x => { parts[x.type] = x.value; });
+  const day = String(Number(parts.day));
+  return day + " " + parts.month + (withYear !== false && parts.year ? " " + parts.year : "");
+}
+
+export function formatWhen(isoOrDate, { withYear = true, withTime = true, withZone = false } = {}) {
+  const date = formatDate(isoOrDate, { withYear });
+  if (!date) return "";
+  const clock = withTime ? formatClock(isoOrDate, { withZone }) : "";
   return clock ? date + " at " + clock : date;
+}
+
+function digitsUnit(n, singular, plural) {
+  const v = Math.round(Math.abs(Number(n)));
+  if (!isFinite(v)) return "";
+  const unit = v === 1 ? singular : (plural || singular + "s");
+  return v + " " + unit;
 }
 
 export function ago(iso) {
@@ -252,9 +263,9 @@ export function ago(iso) {
   const s = (Date.now() - new Date(iso)) / 1000;
   if (!isFinite(s)) return "";
   if (Math.abs(s) < 45) return "just now";
-  if (Math.abs(s) < 3600) return unitCount(Math.max(1, Math.round(Math.abs(s) / 60)), "minute") + " ago";
-  if (Math.abs(s) < 86400) return unitCount(Math.max(1, Math.round(Math.abs(s) / 3600)), "hour") + " ago";
-  return unitCount(Math.max(1, Math.round(Math.abs(s) / 86400)), "day") + " ago";
+  if (Math.abs(s) < 3600) return digitsUnit(Math.max(1, Math.round(Math.abs(s) / 60)), "minute") + " ago";
+  if (Math.abs(s) < 86400) return digitsUnit(Math.max(1, Math.round(Math.abs(s) / 3600)), "hour") + " ago";
+  return digitsUnit(Math.max(1, Math.round(Math.abs(s) / 86400)), "day") + " ago";
 }
 
 export function compactStatus(state) {
@@ -287,7 +298,8 @@ function tidy(s) {
     .replace(/[ \t]+/g, " ")
     .replace(/(?:,\s*){2,}/g, ", ")
     .replace(/\s+([,.;:!?])/g, "$1")
-    .replace(/([,;:])(?=\S)/g, "$1 ")
+    .replace(/([,;])(?=\S)/g, "$1 ")
+    .replace(/:(?=\S)/g, (all, off, str) => (/\d/.test(str[off - 1] || "") && /\d/.test(str[off + 1] || "") ? ":" : ": "))
     .replace(/\s*\n+\s*/g, " ")
     .replace(/\s{2,}/g, " ")
     .replace(/^[,;.\s]+/, "")
@@ -345,11 +357,17 @@ export function naturalize(text) {
   const dateRe = new RegExp("\\b(?:(" + WEEK_RE + ")[, ]+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+(" + MONTH_RE + ")(?:[, ]+(\\d{4}))?(?:[, ]+([01]?\\d|2[0-3]):([0-5]\\d)(?:[:.][0-5]\\d)?(?:\\s*(GMT|BST|UTC))?)?\\b", "gi");
   s = s.replace(dateRe, (all, week, day, mon, year, hh, mm, zone) => {
     const dayN = Number(day);
-    const ordinal = ORDINALS[dayN] || numberToWords(dayN);
-    let out = (week ? weekName(week) + " the " : "the ") + ordinal + " of " + monthName(mon);
-    if (year) out += ", " + numberToWords(Number(year));
+    let out = dayN + " " + monthName(mon);
+    if (year) out += " " + year;
     if (hh != null) out += " at " + clockFromHm(hh, mm, zone);
     return park(out);
+  });
+
+  s = s.replace(/\b([1-9]|1[0-2]):([0-5]\d)(?::[0-5]\d)?\s*([ap]\.?m\.?)(?:\s*(GMT|BST|UTC))?\b/gi, (all, hh, mm, ap, zone) => {
+    const h = Number(hh);
+    const isPm = /^p/i.test(ap);
+    const h24 = h === 12 ? (isPm ? 12 : 0) : h + (isPm ? 12 : 0);
+    return park(clockFromHm(h24, mm, zone));
   });
 
   s = s.replace(/\b([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?:\s*(GMT|BST|UTC))?\b/g, (all, hh, mm, zone) => park(clockFromHm(hh, mm, zone)));
@@ -357,7 +375,10 @@ export function naturalize(text) {
   s = s.replace(/\b(\d+(?:,\d{3})*)\s*(ms|milliseconds?|px|pixels?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?)\s+ago\b/gi, (all, n, u) => {
     const pair = UNIT_WORDS[u.toLowerCase()];
     if (!pair) return all;
-    return park(unitCount(Number(String(n).replace(/,/g, "")), pair[0], pair[1]) + " ago");
+    const v = Number(String(n).replace(/,/g, ""));
+    if (!isFinite(v)) return all;
+    const unit = Math.abs(v) === 1 ? pair[0] : pair[1];
+    return park(v + " " + unit + " ago");
   });
 
   s = s.replace(/\b(\d+(?:,\d{3})*(?:\.\d+)?)\s*(ms|milliseconds?|px|pixels?|secs?|seconds?|mins?|minutes?|hrs?|hours?|days?)\b/gi, (all, n, u) => {
@@ -411,7 +432,7 @@ export function naturalize(text) {
 
 export function requestNarration(r, name) {
   const when = ago(r && r.createdAt);
-  const clock = r && r.repliedAt ? formatClock(r.repliedAt, { withZone: true }) : "";
+  const clock = r && r.repliedAt ? formatClock(r.repliedAt) : "";
   const who = name || "";
   const status = r && r.status;
   if (status === "answered") {
@@ -437,7 +458,7 @@ export function dossierRequestLine(r, name) {
   const status = r && r.status;
   const who = name || "";
   if (status === "answered") {
-    if (when && r.repliedAt) return "Answered " + when + ", at " + formatClock(r.repliedAt, { withZone: true }) + ".";
+    if (when && r.repliedAt) return "Answered " + when + ", at " + formatClock(r.repliedAt) + ".";
     if (when) return "Answered " + when + ".";
     return "This one has been answered.";
   }
@@ -474,7 +495,7 @@ export function dossierLineHtml(r, name, esc) {
 
 export function messageTiming(r, name) {
   const when = ago(r && r.createdAt);
-  const clock = r && r.repliedAt ? formatClock(r.repliedAt, { withZone: true }) : "";
+  const clock = r && r.repliedAt ? formatClock(r.repliedAt) : "";
   const who = name || "";
   const status = r && r.status;
   if (status === "answered") {

@@ -20,3 +20,4 @@ A standalone 3D command centre for a crew of Grok Bots. You talk only to **Jarvi
 - Status, times, amounts and quantities are read out in natural spoken English, both on screen and through the voice link (v2.6.3).
 - Opening a bot's info panel lists every message from that bot, with the request and full reply, in a list that scrolls inside the panel (v2.6.4).
 - Handoffs such as advise, ask, or tell a named crew member always queue an Inbox item, and History labels the user Peter (v2.6.5).
+- Crew labels show each bot's current name and role from Second Brain (falling back to the roster), and on-screen dates and times use forms such as 14 November 2026 and 12:25 pm (v2.6.6).
