@@ -1,7 +1,7 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=264";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=264";
-import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=264";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=265";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=265";
+import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=265";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -525,7 +525,7 @@ async function systemPrompt() {
 Reply in one to three short spoken sentences of plain, natural English, with contractions. Weave any facts, crew statuses, times, and amounts into those sentences; never read back lists, bullets, pipes, labels, or bare metrics.
 Write every number, currency amount, and quantity in natural spoken words — for example "one hundred and fifty pounds twenty-two", "twelve minutes ago", "three bots", "twelve point five percent". Never use raw digits, and never read a number digit by digit.
 No markdown, lists, symbols, emoji or URLs.
-You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, set route to a non-null object with that bot's exact crew name and a short task brief; the deck then adds it to your Second Brain inbox addressed to that bot. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a job is done or started. Never say "route sent", "passed on", "queued", "I've passed", "I'll pass", "sent to", "routed" or similar yourself — the deck appends the real outcome line after it actually queues the job. In the spoken reply, just say briefly what that bot will be asked to do, without claiming it has already been sent. Do not say when the bot will pick it up.
+You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, set route to a non-null object with that bot's exact crew name and a short task brief; the deck then adds it to your Second Brain inbox addressed to that bot. If the user asks you to advise, ask, tell, brief, inform, or otherwise pass work to a named crew member, you MUST set route to that bot; never use route null for those requests. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a job is done or started. Never say "route sent", "passed on", "queued", "I've passed", "I'll pass", "sent to", "routed" or similar yourself — the deck appends the real outcome line after it actually queues the job. In the spoken reply, just say briefly what that bot will be asked to do, without claiming it has already been sent. Do not say when the bot will pick it up. Never claim a crew member confirmed, received, replied to, started, or finished a job unless the inbox snapshot below shows that request as answered. If it is not shown as answered, say you do not have a confirmation yet. Never invent times or outcomes.
 Here is the crew, as natural sentences (the snapshot may be a little out of date):
 ${crewBrief()}
 Inbox snapshot:
@@ -614,13 +614,25 @@ function userHasTask(text) {
   if (!t) return false;
   const deckTalk = /\b(instant link|webhook|command deck|this deck|settings webhook)\b/i.test(t)
     || (/^\s*(why|how|what)\b/i.test(t) && /\b(link|route|routing|queue|queued|webhook|fail|failing|blocked)\b/i.test(t));
-  const hasAction = /\b(please|can you|could you|would you|i need|i want you to|ask |tell |check |get |fetch |send |draft |write |make |fix |look(?:ing)? at|review |handle |prepare |pull |find |schedule |book |remind |update |create )\b/i.test(t)
-    || /^(check|get|fetch|send|draft|write|make|fix|review|handle|prepare|find|schedule|book|remind|update|create|add)\b/i.test(t);
+  const hasAction = /\b(please|can you|could you|would you|i need|i want you to|ask |tell |advise |brief |inform |notify |let |check |get |fetch |send |draft |write |make |fix |look(?:ing)? at|review |handle |prepare |pull |find |schedule |book |remind |update |create )\b/i.test(t)
+    || /^(check|get|fetch|send|draft|write|make|fix|review|handle|prepare|find|schedule|book|remind|update|create|add|advise|ask|tell|brief|inform|notify)\b/i.test(t)
+    || /\b(?:advise|ask|tell|brief|inform|notify)\s+[A-Za-z]/i.test(t);
   if (deckTalk && !hasAction) return false;
-  if (deckTalk && !/\b(ask |tell |pass |route |send (?:this|that|it) to)\b/i.test(t) && !mentionedCrew(t).length) return false;
+  if (deckTalk && !/\b(ask |tell |advise |brief |pass |route |send (?:this|that|it) to)\b/i.test(t) && !mentionedCrew(t).length) return false;
   if (hasAction) return true;
+  if (mentionedCrew(t).length && /\b(?:pass|route|forward|hand(?:ing|ed)? off|let .+ know)\b/i.test(t)) return true;
   if (/^(ok|okay|thanks|thank you|cheers|right|yes|no|yep|nope|got it|and|what|why|how)[.!?]*$/i.test(t)) return false;
   return false;
+}
+function inferUserHandoff(userText) {
+  const task = String(userText || "").replace(/\s+/g, " ").trim();
+  if (!task || !userHasTask(task)) return null;
+  const names = mentionedCrew(task);
+  if (!names.length) return null;
+  const verb = /\b(?:advise|ask|tell|brief|inform|notify|pass|route|send|forward|update|remind|let)\b/i;
+  const vm = verb.exec(task);
+  if (vm) names.sort((a, b) => Math.abs(a.at - vm.index) - Math.abs(b.at - vm.index));
+  return { i: names[0].i, task };
 }
 function parseReply(raw, userText) {
   let t = String(raw || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
@@ -628,7 +640,7 @@ function parseReply(raw, userText) {
   let reply = "", route = null;
   if (js) { try { const o = JSON.parse(js); reply = String(o.reply || "").trim(); route = routeFrom(o); } catch { } }
   if (!reply) reply = t.replace(/[{}"]/g, "").trim();
-  if (!route) route = inferHandoff(reply, userText) || inferHandoff(t, userText);
+  if (!route) route = inferHandoff(reply, userText) || inferHandoff(t, userText) || inferUserHandoff(userText);
   if (route && !userHasTask(userText)) route = null;
   return { reply, route };
 }
@@ -701,7 +713,7 @@ async function flushHistory() {
   try {
     for (let i = 0; i < 4 && histQ.length; i++) {
       const { n, etag } = await sbGet(c.hist); if (!etag) throw new Error("no ETag");
-      const who = hEsc(hudCfg().name || "You"), entries = histQ.map(e => `## ${hWhen(e.at)} · Command Deck\n<!-- id:${e.id} at:${e.at} dev:${DEV.replace(/[^\w-]/g, "")} -->\n\n**${who}:** ${hEsc(e.q)}\n\n**Jarvis:** ${hEsc(e.a)}\n`).join("\n---\n\n");
+      const who = hEsc(hudCfg().name || "Peter"), entries = histQ.map(e => `## ${hWhen(e.at)} · Command Deck\n<!-- id:${e.id} at:${e.at} dev:${DEV.replace(/[^\w-]/g, "")} -->\n\n**${who}:** ${hEsc(e.q)}\n\n**Jarvis:** ${hEsc(e.a)}\n`).join("\n---\n\n");
       let md = String(n.markdown || "").replace(/\s+$/, ""); md += (/^## /m.test(md) ? "\n\n---\n\n" : "\n\n") + entries;
       while (md.length > 190000) { const a = md.search(/^## /m), b = md.indexOf("\n## ", a + 3); if (a < 0 || b < 0) break; md = md.slice(0, a) + md.slice(b + 1); }
       const r = await fetch(noteUrl(c.hist), { method: "PATCH", headers: { Authorization: "Bearer " + token(), "Content-Type": "application/json", "If-Match": etag, "X-Second-Brain-Agent": WRITE_AGENT },
@@ -815,7 +827,7 @@ $("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" :
 $("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
 $("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
 setInterval(() => { if (!S.suspended && histQ.length) flushHistory(); }, 30000);
-window.__talk = { converse, parseReply, inferHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D, poll, naturalize, numberToWords, ago, formatClock, formatWhen, refreshAgo, renderLink, systemPrompt, crewBrief, inboxBrief, messagesForBot, renderDossier };
+window.__talk = { converse, parseReply, inferHandoff, inferUserHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D, poll, naturalize, numberToWords, ago, formatClock, formatWhen, refreshAgo, renderLink, systemPrompt, crewBrief, inboxBrief, messagesForBot, renderDossier };
 
 // ---------- boot (called by the PIN lock after unlock; not on page load) ----------
 export async function boot() {
@@ -825,7 +837,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=264");
+      const { Deck } = await import("./scene.js?v=265");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;

@@ -19,3 +19,4 @@ A standalone 3D command centre for a crew of Grok Bots. You talk only to **Jarvi
 - Crew nodes are 3D bot avatars (body shape from each bot's avatar where set, dark visor, glowing eyes, antenna, role badge).
 - Status, times, amounts and quantities are read out in natural spoken English, both on screen and through the voice link (v2.6.3).
 - Opening a bot's info panel lists every message from that bot, with the request and full reply, in a list that scrolls inside the panel (v2.6.4).
+- Handoffs such as advise, ask, or tell a named crew member always queue an Inbox item, and History labels the user Peter (v2.6.5).
