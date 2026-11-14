@@ -1,7 +1,8 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=2610";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2610";
-import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2610";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=2611";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2611";
+import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2611";
+import { partitionVoices, pickBestVoice } from "./voices.js?v=2611";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -749,34 +750,53 @@ async function flushHistory() {
   histBusy = false;
 }
 
-// ----- text-to-speech (browser voices, British male preferred) -----
-const TTS = { gen: 0, timer: null, lastB: 0, safety: null };
+// ----- text-to-speech (browser voices, natural British English preferred) -----
+const TTS = { gen: 0, timer: null, lastB: 0, safety: null, resume: null, unlocked: false };
 const synth = window.speechSynthesis || null;
 function voices() { try { return synth ? synth.getVoices() : []; } catch { return []; } }
-function pickVoice() {
-  const vs = voices(), want = LS.get("jcd.voice"); if (want) { const v = vs.find(x => x.voiceURI === want || x.name === want); if (v) return v; }
-  const gb = vs.filter(v => /en[-_]GB/i.test(v.lang));
-  return gb.find(v => /\b(male|daniel|george|arthur|oliver|ryan|thomas|harry|james|brian)\b/i.test(v.name)) || gb.find(v => /Google UK English Male/i.test(v.name)) || gb[0] || vs.find(v => /^en/i.test(v.lang)) || null;
+function pickVoice() { return pickBestVoice(voices(), LS.get("jcd.voice")); }
+function unlockSpeech() {
+  if (!synth || TTS.unlocked) return;
+  try {
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0; u.rate = 1; u.lang = "en-GB";
+    synth.speak(u); synth.cancel();
+    TTS.unlocked = true;
+  } catch { }
 }
+document.addEventListener("pointerdown", unlockSpeech, { capture: true, passive: true });
+document.addEventListener("touchend", unlockSpeech, { capture: true, passive: true });
+document.addEventListener("click", unlockSpeech, { capture: true });
 function chunks(t) { const out = []; String(t).replace(/\s+/g, " ").match(/[^.!?]+[.!?]*\s*/g)?.forEach(sn => { sn = sn.trim(); if (!sn) return; while (sn.length > 190) { let k = sn.lastIndexOf(",", 190); if (k < 60) k = sn.lastIndexOf(" ", 190); if (k < 1) k = 190; out.push(sn.slice(0, k + 1)); sn = sn.slice(k + 1).trim(); } if (sn) out.push(sn); }); return out.length ? out : [String(t)]; }
 function speak(text, onDone) {
   const spoken = naturalize(text);
-  const done = () => { clearInterval(TTS.timer); clearTimeout(TTS.safety); setMode(null); afterSpeak(); onDone && onDone(); };
+  const done = () => { clearInterval(TTS.timer); clearTimeout(TTS.safety); clearInterval(TTS.resume); setMode(null); afterSpeak(); onDone && onDone(); };
   if (!synth || !spoken) { done(); return; }
-  stopSpeaking(true); const g = ++TTS.gen, parts = chunks(spoken), v = pickVoice(), rate = +(LS.get("jcd.rate") || 1);
+  stopSpeaking(true); try { synth.resume(); } catch { } const g = ++TTS.gen, parts = chunks(spoken), v = pickVoice(), rate = +(LS.get("jcd.rate") || 1);
   setMode("speaking");
-  parts.forEach((p, idx) => { const u = new SpeechSynthesisUtterance(p); if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "en-GB"; u.rate = rate; u.pitch = .95;
+  parts.forEach((p, idx) => { const u = new SpeechSynthesisUtterance(p); if (v) u.voice = v; u.lang = "en-GB"; u.rate = rate; u.pitch = .95;
     u.onboundary = () => { TTS.lastB = performance.now(); deck && deck.setLevel(.75 + Math.random() * .25); };
     u.onend = () => { if (g === TTS.gen && idx === parts.length - 1) done(); };
     u.onerror = ev => { if (g === TTS.gen && idx === parts.length - 1 && ev.error !== "interrupted" && ev.error !== "canceled") done(); };
     synth.speak(u); });
   // amplitude envelope: real word-boundary events where the browser fires them, a speech-like envelope otherwise
   TTS.timer = setInterval(() => { if (g !== TTS.gen) return; if (performance.now() - TTS.lastB > 260) deck && deck.setLevel(.3 + Math.random() * .45); }, 120);
+  // Chrome and some mobile browsers pause mid-utterance; keep speech running.
+  TTS.resume = setInterval(() => { if (g !== TTS.gen) return; try { if (synth.speaking && synth.paused) synth.resume(); } catch { } }, 250);
   TTS.safety = setTimeout(() => { if (g === TTS.gen && D.mode === "speaking") { synth.cancel(); done(); } }, 4000 + spoken.length * 110 / rate);
 }
-function stopSpeaking(silent) { TTS.gen++; clearInterval(TTS.timer); clearTimeout(TTS.safety); try { synth && synth.cancel(); } catch { } if (!silent && D.mode === "speaking") setMode(null); }
+function stopSpeaking(silent) { TTS.gen++; clearInterval(TTS.timer); clearTimeout(TTS.safety); clearInterval(TTS.resume); try { synth && synth.cancel(); } catch { } if (!silent && D.mode === "speaking") setMode(null); }
 function afterSpeak() { if (D.talk && SRc && pref("relisten", true)) setTimeout(() => { if (D.talk && !rec && !D.mode) listen(); }, 380); }
-if (synth) { synth.onvoiceschanged = () => { if (!$("settings").hidden) settingsVoice(); }; voices(); }
+function watchVoices() {
+  if (!synth) return;
+  let tries = 0;
+  const refresh = () => { if ($("settings") && !$("settings").hidden) settingsVoice(); };
+  const poll = () => { if (voices().length) { refresh(); return; } if (++tries < 24) setTimeout(poll, tries < 10 ? 250 : 600); };
+  try { synth.addEventListener("voiceschanged", refresh); } catch { synth.onvoiceschanged = refresh; }
+  voices();
+  poll();
+}
+watchVoices();
 
 // ----- speech recognition (Web Speech API, en-GB) + mic level meter -----
 const SRc = window.SpeechRecognition || window.webkitSpeechRecognition || null;
@@ -848,21 +868,31 @@ function settingsVoice() {
   $("xkState").textContent = xkey() ? "An xAI key is saved on this device (hidden; shared with the Jarvis HUD on this site)." : "No xAI key yet. Without one, messages are queued in Jarvis's inbox instead of answered instantly.";
   $("xkIn").value = ""; $("xModel").value = xmodel();
   const sel = $("vSel"), vs = voices(), cur = LS.get("jcd.voice") || "";
-  const gb = vs.filter(v => /en[-_]GB/i.test(v.lang)), other = vs.filter(v => !/en[-_]GB/i.test(v.lang) && /^en/i.test(v.lang));
+  const { gb, other } = partitionVoices(vs);
   const auto = pickVoice();
-  sel.innerHTML = `<option value="">Automatic, British male if available${auto ? " (" + esc(auto.name) + ")" : ""}</option>` +
+  const autoLabel = auto ? "Automatic, most natural British voice (" + esc(auto.name) + ")" : "Automatic, most natural British voice";
+  sel.innerHTML = `<option value="">${autoLabel}</option>` +
     (gb.length ? `<optgroup label="British English">${gb.map(v => `<option value="${esc(v.voiceURI)}">${esc(v.name)}</option>`).join("")}</optgroup>` : "") +
     (other.length ? `<optgroup label="Other English">${other.map(v => `<option value="${esc(v.voiceURI)}">${esc(v.name)} (${esc(v.lang)})</option>`).join("")}</optgroup>` : "") +
     (!vs.length ? `<option disabled>${synth ? "Voices are still loading…" : "Speech output isn't supported in this browser"}</option>` : "");
-  sel.value = cur; const rt = LS.get("jcd.rate") || "1"; $("vRate").value = rt; $("vRateV").textContent = naturalize((+rt).toFixed(2)) + " times";
+  sel.value = cur;
+  if (cur && sel.value !== cur) sel.value = "";
+  const rt = LS.get("jcd.rate") || "1"; $("vRate").value = rt; $("vRateV").textContent = naturalize((+rt).toFixed(2)) + " times";
   $("relistenChk").checked = pref("relisten", true); $("speakTypedChk").checked = pref("speakTyped", true); $("histChk").checked = pref("hist", true);
+  const hint = $("vHint");
+  if (hint) {
+    if (!synth) hint.textContent = "Speech output isn't supported in this browser.";
+    else if (!vs.length) hint.textContent = "Voices are still loading on this device. Keep this panel open, or tap Test voice in a moment.";
+    else if (!gb.length) hint.textContent = "No British English voice was found on this device yet. Other English voices are listed below, and the picker will update if a British voice appears.";
+    else hint.textContent = "British English voices are listed first, with the more natural ones at the top. Automatic uses the most natural British voice this device offers. Your choice is saved on this device.";
+  }
 }
 $("xkSave").onclick = () => { const v = $("xkIn").value.trim(); if (!v) return; LS.set("jarvis.key", v); $("xkIn").value = ""; settingsVoice(); renderNote(); renderDialog(); };
 $("xkForget").onclick = () => { LS.del("jarvis.key"); settingsVoice(); $("xkState").textContent = "Key forgotten on this device (this also removes it from the Jarvis HUD here)."; renderNote(); renderDialog(); };
 $("xModel").onchange = e => { const v = e.target.value.trim(); if (v) LS.set("jcd.model", v); else LS.del("jcd.model"); };
 $("vSel").onchange = e => { if (e.target.value) LS.set("jcd.voice", e.target.value); else LS.del("jcd.voice"); };
 $("vRate").oninput = e => { LS.set("jcd.rate", e.target.value); $("vRateV").textContent = naturalize((+e.target.value).toFixed(2)) + " times"; };
-$("vTest").onclick = e => { e.preventDefault(); speak("The Command Deck voice link is online and standing by."); };
+$("vTest").onclick = e => { e.preventDefault(); unlockSpeech(); speak("This is the Command Deck, speaking in this voice."); };
 $("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" : "0");
 $("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
 $("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
@@ -877,7 +907,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=2610");
+      const { Deck } = await import("./scene.js?v=2611");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;

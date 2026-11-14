@@ -12,7 +12,7 @@ A standalone 3D command centre for a crew of Grok Bots. You talk only to **Jarvi
 - Edit the crew in `config.js` (`ROSTER`).
 
 ## v2: live voice loop + Grok-Bot-style avatars
-- **Talk mode** (TALK button, or hold the mic): Web Speech recognition (en-GB) → auto-send → Jarvis replies instantly via xAI → spoken with the browser's speech synthesis (British male preferred; picker in Settings) → listens again. Tap the mic while Jarvis speaks to interrupt.
+- **Talk mode** (TALK button, or hold the mic): Web Speech recognition (en-GB) → auto-send → Jarvis replies instantly via xAI → spoken with the browser's speech synthesis (natural British English preferred; picker at the top of Settings, including on a phone) → listens again. Tap the mic while Jarvis speaks to interrupt.
 - Jarvis's reply returns `{reply, route}`; when `route` names a crew member the request is appended to the Inbox note for that bot and an outbound beam fires straight away.
 - The xAI key is entered at runtime (shared `jarvis.key` with the Jarvis HUD on this origin). The persona comes from the Voice & Style note when its id is set.
 - Each exchange is appended to the History note in the HUD's entry format (If-Match).
@@ -25,3 +25,4 @@ A standalone 3D command centre for a crew of Grok Bots. You talk only to **Jarvi
 - Crew labels use the renamed bots (Dashboard Bot, Finance Bot, Marketing Bot, Email Bot, Data and Files Bot, Business Bot, PC Health Bot), even when a status line still carries an old name (v2.6.8).
 - Fixed stale caches so label updates always load after a release (v2.6.9).
 - Dates, times and numbers that bots write in their own status lines and replies are shown naturally, such as "Saturday 14 November at around 6:25 am" and "9:57 pm", with GMT/UTC converted to London time and the zone label dropped. Version numbers, IDs, references, money, mileage and HTTP codes stay as written on screen and are read aloud naturally by the voice (v2.6.10). Test: `node tests/naturalize-text.test.mjs`.
+- The voice picker lives at the top of Settings so it is reachable on a phone. It lists British English voices first (preferring natural or neural voices such as Google UK English, Daniel, Serena, Kate, Arthur, Martha, and Microsoft Sonia or Ryan), remembers the choice on the device, and includes a Test voice button. Voices are refreshed as the browser loads them (v2.6.11). Test: `node tests/voices.test.mjs`.

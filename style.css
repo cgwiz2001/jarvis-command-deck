@@ -199,6 +199,18 @@ label.chk{display:flex;gap:10px;align-items:center}
 label.chk input{width:18px;height:18px;margin:0;display:inline-block}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
 details summary{cursor:pointer;color:var(--lav);font-size:13px;margin-top:12px}
+
+/* voice picker (kept at the top of Settings so it is reachable on a phone) */
+#voiceSec{padding-top:4px}
+#vHint{margin:0 0 8px;font-size:12.5px;line-height:1.45}
+#settings .sheet{-webkit-overflow-scrolling:touch;max-height:calc(100% - 24px - var(--safe-t) - var(--safe-b));margin:calc(8px + var(--safe-t)) auto calc(8px + var(--safe-b))}
+#settings label select,#vSel{color-scheme:dark}
+#vTest{min-height:40px}
+@media (max-width:820px){
+  #settings .sheet{width:calc(100% - 16px);padding:16px 16px calc(16px + var(--safe-b));border-radius:22px}
+  #settings label input,#settings label select{font-size:16px;min-height:44px;border-radius:12px}
+  #settings .voice-actions .btn{min-height:44px;flex:1}
+}
 #nogl{position:fixed;inset:0;display:grid;place-items:center;z-index:5}
 #nogl[hidden]{display:none}
 /* mobile */
