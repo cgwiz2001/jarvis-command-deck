@@ -471,3 +471,35 @@ export function dossierLineHtml(r, name, esc) {
   }
   return esc(text);
 }
+
+export function messageTiming(r, name) {
+  const when = ago(r && r.createdAt);
+  const clock = r && r.repliedAt ? formatClock(r.repliedAt, { withZone: true }) : "";
+  const who = name || "";
+  const status = r && r.status;
+  if (status === "answered") {
+    if (when && clock) return { when, clock, text: "Asked " + when + ", answered at " + clock + "." };
+    if (when) return { when, clock, text: "Asked " + when + ", and this has been answered." };
+    if (clock) return { when, clock, text: "This has been answered, at " + clock + "." };
+    return { when, clock, text: "This has been answered." };
+  }
+  if (status === "routed") {
+    if (when && who) return { when, clock, text: "Asked " + when + ", and currently with " + who + "." };
+    if (when) return { when, clock, text: "Asked " + when + ", still waiting for an answer." };
+    if (who) return { when, clock, text: "This is currently with " + who + ", still waiting for an answer." };
+    return { when, clock, text: "This one is with the crew, still waiting for an answer." };
+  }
+  if (when) return { when, clock, text: "Asked " + when + ", and not yet routed." };
+  return { when, clock, text: "Asked, and not yet routed." };
+}
+
+export function messageTimingHtml(r, name, esc) {
+  const info = messageTiming(r, name);
+  const when = info.when || "";
+  const iso = (r && r.createdAt) || "";
+  if (when && iso && info.text.includes(when)) {
+    const span = `<span data-ago="${esc(iso)}">${esc(when)}</span>`;
+    return esc(info.text).replace(esc(when), span);
+  }
+  return esc(info.text);
+}

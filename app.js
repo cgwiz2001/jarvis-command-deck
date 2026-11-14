@@ -1,7 +1,7 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=263";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=263";
-import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration } from "./readout.js?v=263";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=264";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=264";
+import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=264";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -250,26 +250,104 @@ function renderRouter() {
     ? "Jobs go to the crew through Second Brain as soon as they're queued."
     : `Link Second Brain in <a href="#" data-open="settings">Settings</a> to queue jobs for the crew.`;
 }
+function inboxBelongsTo(r, i) {
+  const bi = botIndex(r && r.routedTo);
+  if (i === 0) {
+    if (bi === 0) return true;
+    const none = r.routedTo == null || String(r.routedTo).trim() === "";
+    return none && r.status === "answered";
+  }
+  return bi === i;
+}
+function similarMessage(a, b) {
+  const ta = String(a && a.text || "").trim().toLowerCase();
+  const tb = String(b && b.text || "").trim().toLowerCase();
+  if (!ta || ta !== tb) return false;
+  const da = Date.parse(a.createdAt || 0), db = Date.parse(b.createdAt || 0);
+  return !da || !db || Math.abs(da - db) < 5 * 60 * 1000;
+}
+function dialogExchanges() {
+  const items = [], log = Array.isArray(D.log) ? D.log : [];
+  for (let k = 0; k < log.length; k++) {
+    const m = log[k];
+    if (!m || (m.who !== "me" && m.who !== "jv")) continue;
+    if (m.who === "me") {
+      const next = log[k + 1], jv = next && next.who === "jv" ? next : null;
+      items.push({ id: "dlg-" + (m.id || k), createdAt: m.at, text: m.text, reply: jv ? jv.text : null, repliedAt: jv ? jv.at : null, status: jv ? "answered" : "new", routedTo: "Jarvis", source: "dialog" });
+      continue;
+    }
+    const prev = log[k - 1];
+    if (prev && prev.who === "me") continue;
+    items.push({ id: "dlg-" + (m.id || k), createdAt: m.at, text: "", reply: m.text, repliedAt: m.at, status: "answered", routedTo: "Jarvis", source: "dialog" });
+  }
+  return items;
+}
+function messagesForBot(i) {
+  const out = [];
+  for (const r of S.inbox) {
+    if (!r || !inboxBelongsTo(r, i)) continue;
+    out.push(Object.assign({}, r, { source: r.source || "inbox" }));
+  }
+  if (i === 0) {
+    for (const rec of dialogExchanges()) {
+      if (out.some(m => similarMessage(m, rec))) continue;
+      out.push(rec);
+    }
+  }
+  out.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  return out;
+}
+function messageItemHtml(r, name) {
+  const ask = r && r.text ? `<div class="dmsg-ask">${esc(naturalize(r.text))}</div>` : "";
+  const reply = r && r.reply ? `<div class="dmsg-reply">${esc(naturalize(r.reply))}</div>` : "";
+  return `<article class="dmsg" data-mid="${esc(r && r.id || "")}">${ask}<div class="sm">${messageTimingHtml(r, name, esc)}</div>${reply}</article>`;
+}
+function bindDossierScrollGuard() {
+  const panel = $("right");
+  if (!panel || panel._scrollGuard) return;
+  panel._scrollGuard = true;
+  const stop = e => e.stopPropagation();
+  panel.addEventListener("wheel", stop, { passive: true });
+  panel.addEventListener("touchmove", stop, { passive: true });
+}
 function renderDossier() {
   const i = S.selected, el = $("dossier"), panel = $("right");
-  if (i == null) { panel.classList.remove("open"); el._lastKey = ""; return; }
+  bindDossierScrollGuard();
+  if (i == null) { panel.classList.remove("open"); el._lastKey = ""; el._lastBot = null; return; }
   const b = ROSTER[i], s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown";
-  const reqs = S.inbox.filter(r => botIndex(r.routedTo) === i).slice().reverse().slice(0, 5);
-  const key = JSON.stringify([i, !!token(), s || null, reqs]);
+  const msgs = messagesForBot(i);
+  const key = JSON.stringify([i, !!token(), s || null, msgs.map(m => [m.id, m.status, m.text, m.reply, m.repliedAt, m.createdAt, m.source])]);
   if (el._lastKey === key && panel.classList.contains("open")) { refreshAgo(); return; }
+  const sameBot = el._lastBot === i && panel.classList.contains("open");
+  const scroller = el.querySelector(".dscroll");
+  const prevTop = scroller ? scroller.scrollTop : 0;
+  const prevHeight = scroller ? scroller.scrollHeight : 0;
+  const atTop = !scroller || prevTop < 8;
   el._lastKey = key;
-  const top = panel.scrollTop;
+  el._lastBot = i;
   const note = s
     ? esc(naturalize(s.note || "There's no status note for this bot just now."))
     : (token() ? "There's no status line for this bot in Second Brain yet." : "Link Second Brain in Settings to see live status.");
-  el.innerHTML = `<div class="dh" style="--c:${b.color}"><div class="orb"></div><div><h3>${esc(b.name.toUpperCase())}</h3><p>${esc(b.title)}</p></div></div>
-    <span class="stt ${st}">${crewStatePhrase(st)}</span>
-    <div class="dbox"><h5>How things stand just now</h5><div class="ln">${note}</div>${s && s.updatedAt ? `<div class="sm">Last updated on ${esc(formatWhen(s.updatedAt))}.</div>` : ""}</div>
-    ${i === 0 ? `<div class="dbox"><h5>Routing</h5><div class="ln">Every message you send here lands in Jarvis's inbox. Second Brain then routes it to the right bot automatically.</div></div>`
-      : `<div class="dbox"><h5>Recent requests through Jarvis</h5>${reqs.length ? reqs.map(r => `<div class="mini">${esc(naturalize(r.text))}<div class="sm">${dossierLineHtml(r, b.name, esc)}</div></div>`).join("") : `<div class="ln muted">No requests have been sent to ${esc(b.name)} through Jarvis yet.</div>`}</div>`}
-    <button class="btn dact" id="briefBtn">${i === 0 ? "Brief Jarvis" : "Ask Jarvis to brief " + esc(b.name)}</button>`;
+  const list = msgs.length
+    ? msgs.map(r => messageItemHtml(r, b.name)).join("")
+    : `<div class="ln muted">There are no messages from ${esc(b.name)} yet.</div>`;
+  const routing = i === 0
+    ? `<div class="dbox"><h5>Routing</h5><div class="ln">Every message you send here lands in Jarvis's inbox. Second Brain then routes it to the right bot automatically.</div></div>`
+    : "";
+  el.innerHTML = `<div class="dhead"><div class="dh" style="--c:${b.color}"><div class="orb"></div><div><h3>${esc(b.name.toUpperCase())}</h3><p>${esc(b.title)}</p></div></div>
+    <span class="stt ${st}">${crewStatePhrase(st)}</span></div>
+    <div class="dscroll">
+      <div class="dbox"><h5>How things stand just now</h5><div class="ln">${note}</div>${s && s.updatedAt ? `<div class="sm">Last updated on ${esc(formatWhen(s.updatedAt))}.</div>` : ""}</div>
+      ${routing}
+      <div class="dbox dmsgs"><h5>Messages</h5>${list}</div>
+    </div>
+    <div class="dfoot"><button class="btn dact" id="briefBtn">${i === 0 ? "Brief Jarvis" : "Ask Jarvis to brief " + esc(b.name)}</button></div>`;
   panel.classList.add("open");
-  panel.scrollTop = top;
+  const next = el.querySelector(".dscroll");
+  if (next) {
+    if (!sameBot || atTop) next.scrollTop = 0;
+    else next.scrollTop = prevTop + (next.scrollHeight - prevHeight);
+  }
   $("briefBtn").onclick = () => { const inp = $("cmdIn"); inp.value = i === 0 ? "" : `For ${b.name}: `; inp.focus(); if (mobileQ.matches) closeLeft(); };
 }
 function renderAll() { renderLink(); renderFeed(); renderCrew(); renderRouter(); renderDossier(); shift(); if (typeof renderNote === "function" && !D.mode) renderNote(); }
@@ -737,7 +815,7 @@ $("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" :
 $("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
 $("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
 setInterval(() => { if (!S.suspended && histQ.length) flushHistory(); }, 30000);
-window.__talk = { converse, parseReply, inferHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D, poll, naturalize, numberToWords, ago, formatClock, formatWhen, refreshAgo, renderLink, systemPrompt, crewBrief, inboxBrief };
+window.__talk = { converse, parseReply, inferHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D, poll, naturalize, numberToWords, ago, formatClock, formatWhen, refreshAgo, renderLink, systemPrompt, crewBrief, inboxBrief, messagesForBot, renderDossier };
 
 // ---------- boot (called by the PIN lock after unlock; not on page load) ----------
 export async function boot() {
@@ -747,7 +825,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=263");
+      const { Deck } = await import("./scene.js?v=264");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
