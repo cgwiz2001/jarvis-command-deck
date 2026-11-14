@@ -7,7 +7,8 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { makeAvatar, animateAvatar } from "./avatars.js?v=262";
+import { makeAvatar, animateAvatar } from "./avatars.js?v=263";
+import { compactStatus } from "./readout.js?v=263";
 
 const NOISE = /* glsl */`
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
@@ -335,7 +336,7 @@ export class Deck {
   }
   makeLabel(bot, core) {
     const el = document.createElement("div"); el.className = "nl" + (core ? " core" : ""); el.style.setProperty("--c", bot.color);
-    el.innerHTML = `<i class="nl-lead" aria-hidden="true"></i><div class="n"><i></i>${bot.name.toUpperCase()}</div><div class="r">${bot.title}</div>`;
+    el.innerHTML = `<i class="nl-lead" aria-hidden="true"></i><div class="n"><i></i>${bot.name.toUpperCase()}</div><div class="r">${bot.title}</div><div class="st">${compactStatus("unknown")}</div>`;
     el.addEventListener("click", e => { e.stopPropagation(); this.select(this.roster.indexOf(bot)); });
     el.addEventListener("pointerenter", () => this.setHover(this.roster.indexOf(bot)));
     el.addEventListener("pointerleave", () => this.setHover(null));
@@ -444,9 +445,10 @@ export class Deck {
       const s = map[k + 1] || "unknown";
       if (n.state === s) return;
       n.state = s; n.label.classList.remove("working", "waiting", "idle", "unknown"); n.label.classList.add(s);
+      const stEl = n.label.querySelector(".st"); if (stEl) stEl.textContent = compactStatus(s); n.label._mkey = "";
     });
     const cs = map[0] || "unknown";
-    if (this.coreState !== cs) { this.coreState = cs; this.coreLabel.classList.remove("working", "waiting", "idle", "unknown"); this.coreLabel.classList.add(cs); }
+    if (this.coreState !== cs) { this.coreState = cs; this.coreLabel.classList.remove("working", "waiting", "idle", "unknown"); this.coreLabel.classList.add(cs); const stEl = this.coreLabel.querySelector(".st"); if (stEl) stEl.textContent = compactStatus(cs); this.coreLabel._mkey = ""; }
   }
   // ---- beams ----
   makeBeamMeshes(color) {

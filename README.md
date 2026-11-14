@@ -17,3 +17,4 @@ A standalone 3D command centre for a crew of Grok Bots. You talk only to **Jarvi
 - The xAI key is entered at runtime (shared `jarvis.key` with the Jarvis HUD on this origin). The persona comes from the Voice & Style note when its id is set.
 - Each exchange is appended to the History note in the HUD's entry format (If-Match).
 - Crew nodes are 3D bot avatars (body shape from each bot's avatar where set, dark visor, glowing eyes, antenna, role badge).
+- Status, times, amounts and quantities are read out in natural spoken English, both on screen and through the voice link (v2.6.3).

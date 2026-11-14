@@ -1,4 +1,5 @@
 // Jarvis Command Deck — PIN lock. Only a salted PBKDF2 hash is stored locally. No PIN lives in source.
+import { numberToWords, unitCount } from "./readout.js?v=263";
 const ITER = 150000;
 const PREFIX = "jcd.lock.";
 const IDLE_OPTS = [0, 1, 5, 15, 30];
@@ -97,7 +98,7 @@ function paint() {
   const actions = el("lockActions");
   if (mode === "set") {
     heading.textContent = "Set your PIN";
-    hint.textContent = "Choose a 4 to 8 digit PIN for this device. You'll enter it twice.";
+    hint.textContent = "Choose a four to eight digit PIN for this device. You'll enter it twice.";
     forgot.hidden = true;
     actions.hidden = true;
   } else if (mode === "confirm") {
@@ -122,7 +123,7 @@ function cool() {
     const remain = Math.ceil((until() - Date.now()) / 1000);
     const blocked = remain > 0;
     if (pad) pad.querySelectorAll("button").forEach(b => { b.disabled = blocked; });
-    if (blocked) setMsg("Too many tries. Wait " + remain + " s", "wait");
+    if (blocked) setMsg("Too many tries. Please wait " + unitCount(remain, "second") + ".", "wait");
     else {
       if (/Wait/.test(el("lockMsg")?.textContent || "")) setMsg("");
       clearInterval(coolTimer);
@@ -176,7 +177,7 @@ function markFail() {
     lkSet("until", String(Date.now() + 30000 * Math.pow(2, level - 1)));
     cool();
   } else {
-    setMsg(left ? ("Wrong PIN · " + f + " of 5") : "Wrong PIN", "err");
+    setMsg(left ? ("Wrong PIN. That's " + numberToWords(f) + " of five attempts.") : "Wrong PIN.", "err");
   }
 }
 
@@ -193,7 +194,7 @@ async function accept() {
   unlockWaiters.splice(0).forEach(fn => fn());
   if (!started) {
     started = true;
-    app = await import("./app.js?v=262");
+    app = await import("./app.js?v=263");
     await app.boot();
   } else if (app && app.resumeDeck) {
     app.resumeDeck();
@@ -209,7 +210,7 @@ export function lockNow() {
 }
 
 export async function changePin(current, next) {
-  if (!valid(next)) return { ok: false, error: "PIN must be 4 to 8 digits." };
+  if (!valid(next)) return { ok: false, error: "The PIN must be four to eight digits." };
   if (!hasPin() || !(await checkPin(current))) return { ok: false, error: "Current PIN is wrong." };
   await setPin(next);
   clearFails();
@@ -239,7 +240,7 @@ export function bumpActivity() {
 async function submit() {
   if (busy || Date.now() < until()) return;
   if (mode === "set") {
-    if (!valid(buf)) { setMsg(buf.length ? "PIN must be 4 to 8 digits." : "Enter a 4 to 8 digit PIN.", "err"); shake(); return; }
+    if (!valid(buf)) { setMsg(buf.length ? "The PIN must be four to eight digits." : "Enter a four to eight digit PIN.", "err"); shake(); return; }
     pending = buf; buf = ""; mode = "confirm"; setMsg(""); paint(); return;
   }
   if (mode === "confirm") {
@@ -393,7 +394,7 @@ function registerPwa() {
   if (!("serviceWorker" in navigator)) return;
   const ready = () => navigator.serviceWorker.register("./sw.js").then(reg => {
     const prompt = worker => {
-      pwaToast("Update available, tap to reload", () => {
+      pwaToast("An update is available. Tap here to reload.", () => {
         if (worker && worker.state !== "redundant") {
           try { worker.postMessage({ type: "SKIP_WAITING" }); } catch {}
         }

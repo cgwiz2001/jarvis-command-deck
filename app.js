@@ -1,6 +1,7 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, ROUTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=262";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=262";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=263";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=263";
+import { naturalize, numberToWords, unitCount, versionToWords, formatClock, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration } from "./readout.js?v=263";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -31,11 +32,16 @@ function instantLine(name, confirmed) {
 }
 function routeChip(m) {
   const r = m.route; if (!r) return "";
-  const who = r.i > 0 ? "→ " + chip(r.i) + " " : "";
-  let label = "not queued";
-  if (r.ok) label = r.i > 0 ? "sent to " + ROSTER[r.i].name : "queued for instant routing";
-  const jq = r.ok && r.id ? `<div class="jq ${r.confirmed ? "ok" : "warn"}">Jobs queued · ${r.confirmed ? "in Inbox" : "not in Inbox yet"}</div>` : "";
-  return `<div class="rt"><div class="rt-row">${who}<span>${label}</span></div>${jq}</div>`;
+  const who = r.i > 0 ? chip(r.i) : "";
+  let line = "I wasn't able to queue that just now.";
+  if (r.ok && r.i > 0) line = r.confirmed
+    ? `I've sent that to ${who}. It's confirmed in the Inbox.`
+    : `I've queued that for ${who}, but I couldn't confirm it in the Inbox yet.`;
+  else if (r.ok) line = r.confirmed
+    ? "It's queued for instant routing through Second Brain, and it's in the Inbox."
+    : "It's queued for instant routing through Second Brain, but I couldn't confirm it in the Inbox yet.";
+  else if (r.i > 0) line = `I wasn't able to queue that for ${who}.`;
+  return `<div class="rt"><div class="rt-row">${line}</div></div>`;
 }
 
 function noteUrl(id) { const c = conn(); return `${c.base}/context-sets/${encodeURIComponent(c.set)}/notes/${encodeURIComponent(id)}`; }
@@ -72,12 +78,8 @@ function botIndex(nameOrRole, role) {
   return -1;
 }
 const stateOf = s => ({ online: "working", working: "working", busy: "working", waiting: "waiting", blocked: "waiting", idle: "idle" })[String(s || "").toLowerCase()] || "unknown";
-const stateLabel = s => ({ working: "Working", waiting: "Waiting", idle: "Idle", unknown: "No signal" })[s];
 
-// ---------- time ----------
-const TZ = ROUTER.tz;
-const fmtTime = iso => { if (!iso) return ""; const d = new Date(iso); if (isNaN(d)) return ""; return d.toLocaleString("en-GB", { timeZone: TZ, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }); };
-function ago(iso) { const s = (Date.now() - new Date(iso)) / 1000; if (!isFinite(s)) return ""; if (s < 60) return "just now"; if (s < 3600) return Math.round(s / 60) + "m ago"; if (s < 86400) return Math.round(s / 3600) + "h ago"; return Math.round(s / 86400) + "d ago"; }
+// ---------- time (natural-language helpers live in readout.js) ----------
 
 // ---------- state ----------
 const S = { inbox: [], bots: [], botByIdx: {}, at: 0, err: null, polling: false, selected: null, firstPoll: true, freshIds: new Set(), suspended: false };
@@ -151,9 +153,11 @@ function ingest() {
     if (!r || !r.id) continue; const prev = seen[r.id], cur = r.status, bi = botIndex(r.routedTo);
     if (!first && prev !== cur) {
       fresh.add(r.id);
-      if (cur === "routed" && bi > 0) { deck && deck.fire(bi, "out"); toast(`Jarvis routed a request to <b>${esc(ROSTER[bi].name)}</b>.`); }
+      if (cur === "routed" && bi > 0) { deck && deck.fire(bi, "out"); toast(`Jarvis has sent a request on to <b>${esc(ROSTER[bi].name)}</b>.`); }
       if (cur === "answered") { if (bi > 0) { if (prev !== "routed") deck && deck.fire(bi, "out"); setTimeout(() => deck && deck.fire(bi, "in"), prev !== "routed" ? 2400 : 0); }
-        else deck && deck.flareCore(1); toast(`<b>${esc(bi >= 0 ? ROSTER[bi].name : "Jarvis")}</b> answered: ${esc(String(r.reply || "").slice(0, 120))}${String(r.reply || "").length > 120 ? "…" : ""}`, 6500); }
+        else deck && deck.flareCore(1);
+        const raw = String(r.reply || ""), snippet = naturalize(raw.slice(0, 120));
+        toast(`<b>${esc(bi >= 0 ? ROSTER[bi].name : "Jarvis")}</b> answered: ${esc(snippet)}${raw.length > 120 ? "…" : ""}`, 6500); }
       if (cur === "new" && prev === undefined && !S.justSent?.has(r.id)) deck && deck.intake();
     }
     seen[r.id] = cur;
@@ -165,10 +169,18 @@ function ingest() {
 // ---------- rendering ----------
 function renderLink() {
   const p = $("linkPill"), t = $("linkTxt");
-  let cls = "", txt = "Linking…", title = p.title || "";
-  if (!token()) { txt = "Not linked"; title = ""; }
-  else if (S.err) { cls = "err"; txt = S.err === "no token" ? "Not linked" : "Link error"; title = "Second Brain: " + S.err; }
-  else if (S.at) { cls = "live"; txt = "Live · " + new Date(S.at).toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }); title = "Second Brain linked. Checks every " + Math.round(POLL_MS / 1000) + "s."; }
+  let cls = "", txt = "Linking to Second Brain…", title = p.title || "";
+  if (!token()) { txt = "Not linked yet"; title = "Open Settings to link Second Brain."; }
+  else if (S.err) { cls = "err"; txt = S.err === "no token" ? "Not linked yet" : "There's a problem with the link"; title = "Second Brain: " + naturalize(S.err); }
+  else if (S.at) {
+    cls = "live";
+    const clock = formatClock(new Date(S.at), { withZone: true });
+    const open = S.inbox.filter(r => r && (r.status === "new" || r.status === "routed")).length;
+    txt = "Live, last checked at " + clock;
+    if (open === 1) txt += ", with one request still in progress";
+    else if (open > 1) txt += ", with " + numberToWords(open) + " requests still in progress";
+    title = "Second Brain is linked. The deck checks every " + unitCount(Math.round(POLL_MS / 1000), "second") + ".";
+  }
   const key = cls + "|" + txt + "|" + title;
   if (p._lastKey === key) return;
   p._lastKey = key;
@@ -192,35 +204,51 @@ function renderFeed() {
   el._lastKey = key;
   const top = scroller ? scroller.scrollTop : 0;
   if (!token() || errMsg) {
-    el.innerHTML = `<div class="empty"><b>${!token() ? "UPLINK OFFLINE" : "LINK ERROR"}</b>${!token() ? "Add your Second Brain token in Settings to see Jarvis's inbox and the crew's live status." : "Can't reach Second Brain right now (" + esc(S.err) + "). Retrying automatically."}<div style="margin-top:14px"><button class="btn" data-open="settings">Open settings</button></div></div>`;
+    el.innerHTML = `<div class="empty"><b>${!token() ? "The uplink is offline" : "There's a problem with the link"}</b>${!token() ? "Add your Second Brain token in Settings to see Jarvis's inbox and the crew's live status." : "The deck can't reach Second Brain just now (" + esc(naturalize(S.err)) + "). It will retry automatically."}<div style="margin-top:14px"><button class="btn" data-open="settings">Open settings</button></div></div>`;
   } else if (!list.length) {
-    el.innerHTML = `<div class="empty"><b>STANDING BY</b>No requests yet. Brief Jarvis below, Commander.</div>`;
+    el.innerHTML = `<div class="empty"><b>Standing by</b>There are no requests in the inbox yet. Brief Jarvis below when you're ready.</div>`;
   } else {
     el.innerHTML = list.map(r => { const bi = botIndex(r.routedTo), c = bi >= 0 ? ROSTER[bi].color : "#5fd4e8";
-      return `<div class="card ${S.freshIds.has(r.id) ? "fresh" : ""}" data-id="${esc(r.id || "")}" style="--c:${c}"><div class="t">${esc(r.text)}</div>${stepper(r.status)}
-        <div class="meta"><span data-ago="${esc(r.createdAt || "")}">${esc(ago(r.createdAt))}</span>${bi >= 0 ? "<span>→</span>" + chip(bi) : r.routedTo ? "<span>→ " + esc(r.routedTo) + "</span>" : ""}</div>
-        ${r.reply ? `<div class="reply">${esc(r.reply)}</div>` : ""}</div>`; }).join("");
+      const name = bi >= 0 ? ROSTER[bi].name : (r.routedTo || "");
+      return `<div class="card ${S.freshIds.has(r.id) ? "fresh" : ""}" data-id="${esc(r.id || "")}" style="--c:${c}"><div class="t">${esc(naturalize(r.text))}</div>${stepper(r.status)}
+        <div class="meta">${narrationHtml(r, name, esc)}</div>
+        ${r.reply ? `<div class="reply">${esc(naturalize(r.reply))}</div>` : ""}</div>`; }).join("");
   }
   if (scroller) scroller.scrollTop = top;
 }
+function crewSummary() {
+  if (!token()) return `<div class="crew-sum">Link Second Brain in Settings to see how the crew are getting on.</div>`;
+  const counts = { working: 0, waiting: 0, idle: 0, unknown: 0 };
+  for (let i = 0; i < ROSTER.length; i++) { const s = S.botByIdx[i]; counts[s ? stateOf(s.state) : "unknown"]++; }
+  const bits = [];
+  const push = (n, one, many) => { if (n) bits.push(n === 1 ? one : numberToWords(n) + " " + many); };
+  push(counts.working, "one is working", "are working");
+  push(counts.waiting, "one is waiting", "are waiting");
+  push(counts.idle, "one is idle", "are idle");
+  push(counts.unknown, "one has no status signal yet", "have no status signal yet");
+  if (!bits.length) return `<div class="crew-sum">There's no crew status to show just now.</div>`;
+  const tail = bits.length === 1 ? bits[0] : bits.slice(0, -1).join(", ") + ", and " + bits[bits.length - 1];
+  return `<div class="crew-sum">Of the crew, ${tail}.</div>`;
+}
 function renderCrew() {
   const el = $("crew");
-  const dataKey = ROSTER.map((b, i) => { const s = S.botByIdx[i]; return s ? stateOf(s.state) : "unknown"; }).join("|");
-  if (el._lastDataKey === dataKey && el.children.length === ROSTER.length) {
-    el.querySelectorAll(".crow").forEach(row => row.classList.toggle("sel", +row.dataset.sel === S.selected));
+  const dataKey = ROSTER.map((b, i) => { const s = S.botByIdx[i]; return s ? stateOf(s.state) : "unknown"; }).join("|") + "|" + Boolean(token());
+  const rows = el.querySelectorAll(".crow");
+  if (el._lastDataKey === dataKey && rows.length === ROSTER.length) {
+    rows.forEach(row => row.classList.toggle("sel", +row.dataset.sel === S.selected));
     return;
   }
   el._lastDataKey = dataKey;
-  el.innerHTML = ROSTER.map((b, i) => { const s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown";
-    return `<div class="crow ${S.selected === i ? "sel" : ""}" data-sel="${i}" style="--c:${b.color}"><div class="orb"></div><div><div class="nm">${esc(b.name)}</div><div class="rl">${esc(b.title)}</div></div><span class="st stt ${st}">${stateLabel(st)}</span></div>`; }).join("");
+  el.innerHTML = crewSummary() + ROSTER.map((b, i) => { const s = S.botByIdx[i], st = s ? stateOf(s.state) : "unknown";
+    return `<div class="crow ${S.selected === i ? "sel" : ""}" data-sel="${i}" style="--c:${b.color}"><div class="orb"></div><div><div class="nm">${esc(b.name)}</div><div class="rl">${esc(b.title)}</div></div><span class="st stt ${st}">${crewStatePhrase(st)}</span></div>`; }).join("");
 }
 function renderRouter() {
   const el = $("routerInfo"), key = Boolean(token());
   if (el._lastKey === key) return;
   el._lastKey = key;
   el.innerHTML = key
-    ? "INSTANT ROUTING · jobs go to the crew through Second Brain as soon as they're queued"
-    : `INSTANT ROUTING · link Second Brain in <a href="#" data-open="settings">Settings</a> to queue jobs for the crew`;
+    ? "Jobs go to the crew through Second Brain as soon as they're queued."
+    : `Link Second Brain in <a href="#" data-open="settings">Settings</a> to queue jobs for the crew.`;
 }
 function renderDossier() {
   const i = S.selected, el = $("dossier"), panel = $("right");
@@ -231,11 +259,14 @@ function renderDossier() {
   if (el._lastKey === key && panel.classList.contains("open")) { refreshAgo(); return; }
   el._lastKey = key;
   const top = panel.scrollTop;
+  const note = s
+    ? esc(naturalize(s.note || "There's no status note for this bot just now."))
+    : (token() ? "There's no status line for this bot in Second Brain yet." : "Link Second Brain in Settings to see live status.");
   el.innerHTML = `<div class="dh" style="--c:${b.color}"><div class="orb"></div><div><h3>${esc(b.name.toUpperCase())}</h3><p>${esc(b.title)}</p></div></div>
-    <span class="stt ${st}">${stateLabel(st)}</span>
-    <div class="dbox"><h5>Live status line</h5><div class="ln">${s ? esc(s.note || "—") : (token() ? "No status line for this bot in Second Brain yet." : "Link Second Brain in Settings to see live status.")}</div>${s && s.updatedAt ? `<div class="sm">Updated ${esc(fmtTime(s.updatedAt))}</div>` : ""}</div>
+    <span class="stt ${st}">${crewStatePhrase(st)}</span>
+    <div class="dbox"><h5>How things stand just now</h5><div class="ln">${note}</div>${s && s.updatedAt ? `<div class="sm">Last updated on ${esc(formatWhen(s.updatedAt))}.</div>` : ""}</div>
     ${i === 0 ? `<div class="dbox"><h5>Routing</h5><div class="ln">Every message you send here lands in Jarvis's inbox. Second Brain then routes it to the right bot automatically.</div></div>`
-      : `<div class="dbox"><h5>Recent requests via Jarvis</h5>${reqs.length ? reqs.map(r => `<div class="mini">${esc(r.text)}<div class="sm">${esc(r.status)} · <span data-ago="${esc(r.createdAt || "")}">${esc(ago(r.createdAt))}</span></div></div>`).join("") : `<div class="ln muted">None yet.</div>`}</div>`}
+      : `<div class="dbox"><h5>Recent requests through Jarvis</h5>${reqs.length ? reqs.map(r => `<div class="mini">${esc(naturalize(r.text))}<div class="sm">${dossierLineHtml(r, b.name, esc)}</div></div>`).join("") : `<div class="ln muted">No requests have been sent to ${esc(b.name)} through Jarvis yet.</div>`}</div>`}
     <button class="btn dact" id="briefBtn">${i === 0 ? "Brief Jarvis" : "Ask Jarvis to brief " + esc(b.name)}</button>`;
   panel.classList.add("open");
   panel.scrollTop = top;
@@ -269,7 +300,7 @@ function openSettings() {
   $("tokIn").value = ""; $("cBase").value = c.base; $("cSet").value = c.set; $("cInbox").value = c.inbox; $("cStatus").value = c.status; $("cHist").value = c.hist; $("cStyle").value = c.style; settingsVoice();
   $("connState").textContent = c.fromHud ? "Filled in from the Jarvis HUD on this device." : (c.base ? "Saved on this device." : "Enter the API base, context set and the two note ids.");
   $("connDet").open = !c.base; $("qSel").value = LS.get("jcd.quality") || "auto"; $("motionChk").checked = LS.get("jcd.reduced") === "1";
-  $("verTag").textContent = "Command Deck v" + VERSION + (deck ? " · render tier " + deck.tierName : "");
+  $("verTag").textContent = "This is Command Deck " + versionToWords(VERSION) + (deck ? ", running at the " + deck.tierName + " render tier." : ".");
   $("lockAfter").value = String(getIdleMinutes());
   $("lockSetState").textContent = hasPin() ? "A PIN is set on this device. Auto-lock uses the interval below." : "No PIN is set yet.";
   $("lockChangeForm").hidden = true; $("lockCur").value = ""; $("lockN1").value = ""; $("lockN2").value = ""; $("lockChangeState").textContent = "";
@@ -281,8 +312,8 @@ $("tokSave").onclick = () => { const v = $("tokIn").value.trim(); if (!v) return
 $("tokForget").onclick = () => { LS.del("jcd.tok"); $("tokState").textContent = tokenSource() === "hud" ? "Deck token forgotten. The HUD's token on this device is still used." : "Token forgotten."; S.inbox = []; S.bots = []; S.at = 0; lastPollSig = null; ingest(); renderAll(); if (token()) poll(); };
 $("connSave").onclick = () => { const o = { base: $("cBase").value.trim(), set: $("cSet").value.trim(), inbox: $("cInbox").value.trim(), status: $("cStatus").value.trim(), hist: $("cHist").value.trim(), style: $("cStyle").value.trim() }; D.style = null;
   if (o.base && !okBase(o.base)) { $("connState").textContent = "API base must be an https:// URL."; return; } LS.set("jcd.conn", JSON.stringify(o)); $("connState").textContent = "Saved on this device."; lastPollSig = null; poll(); };
-$("connTest").onclick = async () => { $("connState").textContent = "Testing…"; try { const c = conn(); await sbGet(c.status); await sbGet(c.inbox); $("connState").textContent = "Link OK: both notes readable."; } catch (e) { $("connState").textContent = "Link failed: " + e.message; } };
-$("qSel").onchange = e => { LS.set("jcd.quality", e.target.value); toast("Reloading with new visual quality…", 1500); setTimeout(() => location.reload(), 700); };
+$("connTest").onclick = async () => { $("connState").textContent = "Testing the Second Brain link…"; try { const c = conn(); await sbGet(c.status); await sbGet(c.inbox); $("connState").textContent = "The link is working: both notes are readable."; } catch (e) { $("connState").textContent = "The link failed: " + naturalize(e.message); } };
+$("qSel").onchange = e => { LS.set("jcd.quality", e.target.value); toast("Reloading with the new visual quality…", 1500); setTimeout(() => location.reload(), 700); };
 $("motionChk").onchange = e => { LS.set("jcd.reduced", e.target.checked ? "1" : "0"); setTimeout(() => location.reload(), 300); };
 
 $("lockAfter").onchange = e => setIdleMinutes(e.target.value);
@@ -317,7 +348,7 @@ const DEV = LS.get("jcd.dev") || (() => { const d = (mobileQ.matches ? "Phone-" 
 const D = { log: [], hist: [], mode: null, talk: false, interim: "", style: null, styleAt: 0, thinking: false, quietMisses: 0 };
 try { D.log = JSON.parse(LS.get("jcd.dialog") || "[]") || []; } catch {}
 function saveLog() { D.log = D.log.slice(-60); LS.set("jcd.dialog", JSON.stringify(D.log)); }
-function addMsg(who, text, extra) { const m = Object.assign({ id: rid(), who, text: String(text || ""), at: new Date().toISOString() }, extra || {}); D.log.push(m); saveLog(); renderDialog(); return m; }
+function addMsg(who, text, extra) { const raw = String(text || ""); const m = Object.assign({ id: rid(), who, text: who === "me" ? raw : naturalize(raw), at: new Date().toISOString() }, extra || {}); D.log.push(m); saveLog(); renderDialog(); return m; }
 
 // ----- dialogue rendering -----
 function bubble(m) {
@@ -332,7 +363,7 @@ function renderDialog() {
   const el = $("dialog"); if (!el) return;
   const items = D.log.slice(-40);
   el.innerHTML = (items.length || D.interim || D.thinking) ? items.map(bubble).join("") + liveBubbles()
-    : `<div class="empty"><b>VOICE LINK READY</b>${SRc ? "Tap the mic to speak, hold it (or press TALK) for a hands-free conversation." : "Type below to talk to Jarvis. (Voice input isn't supported in this browser.)"}${xkey() ? "" : `<div style="margin-top:10px">Instant replies need an xAI key. <button class="btn" data-open="settings" style="margin-top:10px">Add key in Settings</button></div>`}</div>`;
+    : `<div class="empty"><b>The voice link is ready</b>${SRc ? "Tap the mic to speak, or hold it (or press TALK) for a hands-free conversation." : "Type below to talk to Jarvis. Voice input isn't supported in this browser."}${xkey() ? "" : `<div style="margin-top:10px">Instant replies need an xAI key. <button class="btn" data-open="settings" style="margin-top:10px">Add a key in Settings</button></div>`}</div>`;
   scrollDialog(); renderCaption();
 }
 let capTimer = null;
@@ -355,11 +386,11 @@ function renderCaption() {
 // ----- mood (core reacts) -----
 function renderNote() {
   const n = $("cmdNote");
-  const lbl = { listening: "● Listening…", thinking: "◆ Jarvis is thinking…", speaking: "◉ Jarvis is speaking · tap mic to interrupt" }[D.mode];
+  const lbl = { listening: "Listening…", thinking: "Jarvis is thinking…", speaking: "Jarvis is speaking. Tap the mic to interrupt." }[D.mode];
   const key = lbl ? ("mood:" + lbl + ":" + D.talk) : ("idle:" + !!xkey());
   if (n._lastKey === key) return;
   n._lastKey = key;
-  if (lbl) { n.classList.add("mood"); n.textContent = lbl + (D.talk ? "  ·  Talk mode on" : ""); return; }
+  if (lbl) { n.classList.add("mood"); n.textContent = lbl + (D.talk ? " Talk mode is on." : ""); return; }
   n.classList.remove("mood");
   n.innerHTML = xkey()
     ? `Jarvis replies instantly.<span class="long"> Jobs for the crew go to Jarvis's inbox; Second Brain routes them on at once.</span><span class="short"> Crew jobs: routed through Second Brain.</span>`
@@ -378,18 +409,50 @@ async function loadStyle() {
   return D.style;
 }
 function crewBrief() {
-  return ROSTER.slice(1).map((b, k) => { const s = S.botByIdx[k + 1]; return `- ${b.name}: ${b.title}${s ? ` · ${stateLabel(stateOf(s.state))}: ${String(s.note || "").slice(0, 90)}` : ""}`; }).join("\n");
+  return ROSTER.slice(1).map((b, k) => {
+    const s = S.botByIdx[k + 1];
+    if (!s) return b.name + ", " + b.title + ", has no live status signal just now.";
+    const stPhrase = { working: "is working", waiting: "is waiting", idle: "is idle", unknown: "has no clear status" }[stateOf(s.state)] || "has no clear status";
+    const note = String(s.note || "").trim();
+    const spokenNote = note ? naturalize(note) : "";
+    const when = s.updatedAt ? ", as of " + formatWhen(s.updatedAt) : "";
+    return spokenNote
+      ? (b.name + ", " + b.title + ", " + stPhrase + when + ": " + spokenNote + ".")
+      : (b.name + ", " + b.title + ", " + stPhrase + when + ".");
+  }).join(" ");
+}
+function inboxBrief() {
+  const all = Array.isArray(S.inbox) ? S.inbox : [];
+  if (!all.length) return "The inbox has no requests at the moment.";
+  const n = all.length, counts = { new: 0, routed: 0, answered: 0 };
+  for (const r of all) { if (r && counts[r.status] != null) counts[r.status]++; }
+  const bits = [];
+  const push = (c, one, many) => { if (c) bits.push(c === 1 ? one : numberToWords(c) + " " + many); };
+  push(counts.new, "one is still queued", "are still queued");
+  push(counts.routed, "one has been sent to the crew", "have been sent to the crew");
+  push(counts.answered, "one has been answered", "have been answered");
+  const head = "There " + (n === 1 ? "is one request" : "are " + numberToWords(n) + " requests") + " in the inbox" + (bits.length ? ": " + (bits.length === 1 ? bits[0] : bits.slice(0, -1).join(", ") + ", and " + bits[bits.length - 1]) : "") + ".";
+  const recent = all.slice().reverse().slice(0, 5).map(r => {
+    const bi = botIndex(r.routedTo), name = bi >= 0 ? ROSTER[bi].name : (r.routedTo || "");
+    const snippet = naturalize(String(r.text || "").slice(0, 80));
+    return (snippet ? '"' + snippet + '": ' : "") + requestNarration(r, name).text;
+  }).join(" ");
+  return head + (recent ? " Most recently: " + recent : "");
 }
 async function systemPrompt() {
   const style = await loadStyle();
-  const now = new Date().toLocaleString("en-GB", { timeZone: TZ, weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+  const now = formatWhen(new Date(), { withYear: true });
   return (style ? "Your own Voice & Style notes (follow them):\n" + style + "\n\n" : "You are Jarvis, the user's chief of staff: calm, British, short and precise, with a little dry humour.\n\n") +
 `You are speaking through the Jarvis Command Deck, a live voice link. It is a HUD surface, so use the user's name only when it adds something.
-Reply in one to three short spoken sentences: plain natural speech with contractions, no markdown, lists, symbols, emoji or URLs.
+Reply in one to three short spoken sentences of plain, natural English, with contractions. Weave any facts, crew statuses, times, and amounts into those sentences; never read back lists, bullets, pipes, labels, or bare metrics.
+Write every number, currency amount, and quantity in natural spoken words — for example "one hundred and fifty pounds twenty-two", "twelve minutes ago", "three bots", "twelve point five percent". Never use raw digits, and never read a number digit by digit.
+No markdown, lists, symbols, emoji or URLs.
 You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, set route to a non-null object with that bot's exact crew name and a short task brief; the deck then adds it to your Second Brain inbox addressed to that bot. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a job is done or started. Never say "route sent", "passed on", "queued", "I've passed", "I'll pass", "sent to", "routed" or similar yourself — the deck appends the real outcome line after it actually queues the job. In the spoken reply, just say briefly what that bot will be asked to do, without claiming it has already been sent. Do not say when the bot will pick it up.
-Crew (name: role · live status snapshot, may be out of date):
+Here is the crew, as natural sentences (the snapshot may be a little out of date):
 ${crewBrief()}
-Current date and time: ${now} (Europe/London).
+Inbox snapshot:
+${inboxBrief()}
+The current date and time is ${now}, Europe/London.
 Respond with ONLY a JSON object and nothing else:
 {"reply": "<what you say aloud>", "route": {"bot": "<exact crew name>", "task": "<one-line brief for that bot with the needed detail>"} }
 or {"reply": "...", "route": null}`;
@@ -583,9 +646,10 @@ function pickVoice() {
 }
 function chunks(t) { const out = []; String(t).replace(/\s+/g, " ").match(/[^.!?]+[.!?]*\s*/g)?.forEach(sn => { sn = sn.trim(); if (!sn) return; while (sn.length > 190) { let k = sn.lastIndexOf(",", 190); if (k < 60) k = sn.lastIndexOf(" ", 190); if (k < 1) k = 190; out.push(sn.slice(0, k + 1)); sn = sn.slice(k + 1).trim(); } if (sn) out.push(sn); }); return out.length ? out : [String(t)]; }
 function speak(text, onDone) {
+  const spoken = naturalize(text);
   const done = () => { clearInterval(TTS.timer); clearTimeout(TTS.safety); setMode(null); afterSpeak(); onDone && onDone(); };
-  if (!synth || !text) { done(); return; }
-  stopSpeaking(true); const g = ++TTS.gen, parts = chunks(text), v = pickVoice(), rate = +(LS.get("jcd.rate") || 1);
+  if (!synth || !spoken) { done(); return; }
+  stopSpeaking(true); const g = ++TTS.gen, parts = chunks(spoken), v = pickVoice(), rate = +(LS.get("jcd.rate") || 1);
   setMode("speaking");
   parts.forEach((p, idx) => { const u = new SpeechSynthesisUtterance(p); if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "en-GB"; u.rate = rate; u.pitch = .95;
     u.onboundary = () => { TTS.lastB = performance.now(); deck && deck.setLevel(.75 + Math.random() * .25); };
@@ -594,7 +658,7 @@ function speak(text, onDone) {
     synth.speak(u); });
   // amplitude envelope: real word-boundary events where the browser fires them, a speech-like envelope otherwise
   TTS.timer = setInterval(() => { if (g !== TTS.gen) return; if (performance.now() - TTS.lastB > 260) deck && deck.setLevel(.3 + Math.random() * .45); }, 120);
-  TTS.safety = setTimeout(() => { if (g === TTS.gen && D.mode === "speaking") { synth.cancel(); done(); } }, 4000 + text.length * 110 / rate);
+  TTS.safety = setTimeout(() => { if (g === TTS.gen && D.mode === "speaking") { synth.cancel(); done(); } }, 4000 + spoken.length * 110 / rate);
 }
 function stopSpeaking(silent) { TTS.gen++; clearInterval(TTS.timer); clearTimeout(TTS.safety); try { synth && synth.cancel(); } catch { } if (!silent && D.mode === "speaking") setMode(null); }
 function afterSpeak() { if (D.talk && SRc && pref("relisten", true)) setTimeout(() => { if (D.talk && !rec && !D.mode) listen(); }, 380); }
@@ -619,13 +683,13 @@ function listen() {
   r.onstart = () => { setMode("listening"); $("micBtn").classList.add("rec"); startMeter(); };
   r.onsoundstart = () => deck && deck.setLevel(.4);
   r.onresult = ev => { let f = "", it = ""; for (let i = 0; i < ev.results.length; i++) { const x = ev.results[i]; if (x.isFinal) f += x[0].transcript; else it += x[0].transcript; } fin = f; D.interim = (f + " " + it).trim(); if (!meter) deck && deck.setLevel(.55 + Math.random() * .35); renderDialog(); };
-  r.onerror = ev => { err = ev.error; if (!["aborted", "no-speech"].includes(ev.error)) toast("Mic: " + esc(ev.error === "not-allowed" ? "microphone permission is blocked" : ev.error)); };
+  r.onerror = ev => { err = ev.error; if (!["aborted", "no-speech"].includes(ev.error)) toast(ev.error === "not-allowed" ? "The microphone permission is blocked." : "The microphone had a problem: " + esc(naturalize(ev.error))); };
   r.onend = () => { const txt = (fin || D.interim).trim(); rec = null; $("micBtn").classList.remove("rec"); stopMeter(); D.interim = ""; setMode(null); renderDialog();
     if (txt) { D.quietMisses = 0; converse(txt, true); return; }
     if (D.talk && err === "no-speech" && ++D.quietMisses < 3) { setTimeout(() => D.talk && !rec && !D.mode && listen(), 300); return; }
     if (D.talk && (err === "no-speech" || err === "not-allowed" || err === "audio-capture")) { setTalk(false); addMsg("sys", err === "no-speech" ? "Talk mode paused: I didn't hear anything." : "Talk mode stopped: the microphone isn't available."); }
   };
-  try { r.start(); } catch (e) { rec = null; toast("Mic unavailable: " + esc(e.message)); }
+  try { r.start(); } catch (e) { rec = null; toast("The microphone isn't available: " + esc(naturalize(e.message))); }
 }
 function stopListening(abort) { if (!rec) return; try { abort ? rec.abort() : rec.stop(); } catch { } }
 function setTalk(on) {
@@ -656,24 +720,24 @@ function settingsVoice() {
   const sel = $("vSel"), vs = voices(), cur = LS.get("jcd.voice") || "";
   const gb = vs.filter(v => /en[-_]GB/i.test(v.lang)), other = vs.filter(v => !/en[-_]GB/i.test(v.lang) && /^en/i.test(v.lang));
   const auto = pickVoice();
-  sel.innerHTML = `<option value="">Auto · British male if available${auto ? " (" + esc(auto.name) + ")" : ""}</option>` +
+  sel.innerHTML = `<option value="">Automatic, British male if available${auto ? " (" + esc(auto.name) + ")" : ""}</option>` +
     (gb.length ? `<optgroup label="British English">${gb.map(v => `<option value="${esc(v.voiceURI)}">${esc(v.name)}</option>`).join("")}</optgroup>` : "") +
     (other.length ? `<optgroup label="Other English">${other.map(v => `<option value="${esc(v.voiceURI)}">${esc(v.name)} (${esc(v.lang)})</option>`).join("")}</optgroup>` : "") +
     (!vs.length ? `<option disabled>${synth ? "Voices are still loading…" : "Speech output isn't supported in this browser"}</option>` : "");
-  sel.value = cur; const rt = LS.get("jcd.rate") || "1"; $("vRate").value = rt; $("vRateV").textContent = (+rt).toFixed(2) + "×";
+  sel.value = cur; const rt = LS.get("jcd.rate") || "1"; $("vRate").value = rt; $("vRateV").textContent = naturalize((+rt).toFixed(2)) + " times";
   $("relistenChk").checked = pref("relisten", true); $("speakTypedChk").checked = pref("speakTyped", true); $("histChk").checked = pref("hist", true);
 }
 $("xkSave").onclick = () => { const v = $("xkIn").value.trim(); if (!v) return; LS.set("jarvis.key", v); $("xkIn").value = ""; settingsVoice(); renderNote(); renderDialog(); };
 $("xkForget").onclick = () => { LS.del("jarvis.key"); settingsVoice(); $("xkState").textContent = "Key forgotten on this device (this also removes it from the Jarvis HUD here)."; renderNote(); renderDialog(); };
 $("xModel").onchange = e => { const v = e.target.value.trim(); if (v) LS.set("jcd.model", v); else LS.del("jcd.model"); };
 $("vSel").onchange = e => { if (e.target.value) LS.set("jcd.voice", e.target.value); else LS.del("jcd.voice"); };
-$("vRate").oninput = e => { LS.set("jcd.rate", e.target.value); $("vRateV").textContent = (+e.target.value).toFixed(2) + "×"; };
-$("vTest").onclick = e => { e.preventDefault(); speak("Command Deck voice link online. Standing by."); };
+$("vRate").oninput = e => { LS.set("jcd.rate", e.target.value); $("vRateV").textContent = naturalize((+e.target.value).toFixed(2)) + " times"; };
+$("vTest").onclick = e => { e.preventDefault(); speak("The Command Deck voice link is online and standing by."); };
 $("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" : "0");
 $("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
 $("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
 setInterval(() => { if (!S.suspended && histQ.length) flushHistory(); }, 30000);
-window.__talk = { converse, parseReply, inferHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D };
+window.__talk = { converse, parseReply, inferHandoff, withoutHandoffClaim, stripRouteClaims, userHasTask, confirmQueued, setMode, speak, D, poll, naturalize, numberToWords, ago, formatClock, formatWhen, refreshAgo, renderLink, systemPrompt, crewBrief, inboxBrief };
 
 // ---------- boot (called by the PIN lock after unlock; not on page load) ----------
 export async function boot() {
@@ -683,13 +747,13 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=262");
+      const { Deck } = await import("./scene.js?v=263");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
     } catch (e) { console.warn("3D init failed", e); $("nogl").hidden = false; }
   } else $("nogl").hidden = false;
-  line.textContent = "Linking Second Brain…";
+  line.textContent = "Linking up to Second Brain…";
   renderAll(); renderDialog(); setMode(null); if (!mobileQ.matches) openLeft("talk");
   setTimeout(() => { $("boot").classList.add("gone"); document.body.classList.add("ready"); }, 500);
   if (token()) poll(); else renderAll();
