@@ -92,3 +92,42 @@ export function describeVoice(voice) {
     localService: voice.localService == null ? null : !!voice.localService
   };
 }
+
+export const CLOUD_VOICES = {
+  eve: { id: "eve", name: "Eve", label: "xAI Eve (cloud)" },
+  leo: { id: "leo", name: "Leo", label: "xAI Leo (cloud)" }
+};
+export const XAI_TTS_URL = "https://api.x.ai/v1/tts";
+export const DEVICE_AUTO = "device:auto";
+
+export function parseCloudVoice(saved) {
+  if (!saved || typeof saved !== "string") return null;
+  const m = /^cloud:(eve|leo)$/i.exec(saved.trim());
+  return m ? m[1].toLowerCase() : null;
+}
+
+// When an xAI key is present and the user has not picked a device voice, default to Eve.
+export function chosenCloudVoice(saved, hasKey) {
+  if (!hasKey) return null;
+  const picked = parseCloudVoice(saved);
+  if (picked) return picked;
+  if (!saved) return "eve";
+  return null;
+}
+
+export function cloudVoiceLabel(id) {
+  const v = CLOUD_VOICES[String(id || "").toLowerCase()];
+  return v ? v.label : "xAI voice (cloud)";
+}
+
+export function ttsRequestBody(text, voiceId, speed) {
+  const body = { text: String(text || ""), voice_id: String(voiceId || "eve"), language: "en" };
+  const s = Number(speed);
+  if (Number.isFinite(s) && s !== 1) body.speed = Math.min(1.5, Math.max(0.7, s));
+  return body;
+}
+
+export function deviceVoiceSaved(saved) {
+  if (!saved || parseCloudVoice(saved) || saved === DEVICE_AUTO) return "";
+  return saved;
+}

@@ -1,8 +1,8 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=2612";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2612";
-import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2612";
-import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice } from "./voices.js?v=2612";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=2613";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2613";
+import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2613";
+import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2613";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -750,63 +750,177 @@ async function flushHistory() {
   histBusy = false;
 }
 
-// ----- text-to-speech (browser voices, natural British English preferred) -----
-const TTS = { gen: 0, timer: null, lastB: 0, safety: null, resume: null, unlocked: false };
+// ----- text-to-speech (xAI cloud voices when a key is present, else device) -----
+const TTS = { gen: 0, timer: null, lastB: 0, safety: null, resume: null, unlocked: false, audio: null, audioUnlocked: false, cloudUrl: null, cloudAbort: null, cloudStarted: false };
 const synth = window.speechSynthesis || null;
+const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
 function voices() { try { return synth ? synth.getVoices() : []; } catch { return []; } }
 function pickVoice() {
   // Always re-read getVoices() so a saved URI/name maps to a live voice object after voiceschanged.
-  return pickBestVoice(voices(), LS.get("jcd.voice"));
+  return pickBestVoice(voices(), deviceVoiceSaved(LS.get("jcd.voice") || ""));
 }
 function unlockSpeech() {
-  if (!synth || TTS.unlocked) return;
-  try {
-    const u = new SpeechSynthesisUtterance(" ");
-    u.volume = 0; u.rate = 1;
-    applyVoiceToUtterance(u, pickVoice());
-    synth.speak(u); synth.cancel();
-    TTS.unlocked = true;
-  } catch { }
-}
-function reportSpokenVoice(v) {
-  const el = $("vSpoke");
-  if (!el) return;
-  const d = describeVoice(v);
-  if (!v) {
-    el.textContent = "Last spoken with the browser default. No matching voice object was found. Language set to en-GB.";
-  } else {
-    const where = d.localService === true ? "localService: yes (this device)" : d.localService === false ? "localService: no (network)" : "localService: unknown";
-    el.textContent = "Last spoken with " + d.name + " · " + (d.lang || "unknown language") + " · " + where + ".";
+  if (!TTS.audio) TTS.audio = new Audio();
+  if (!TTS.audioUnlocked) {
+    try {
+      TTS.audio.src = SILENT_WAV;
+      const p = TTS.audio.play();
+      if (p && p.then) p.then(() => { try { TTS.audio.pause(); TTS.audio.currentTime = 0; } catch { } TTS.audioUnlocked = true; }).catch(() => { });
+      else TTS.audioUnlocked = true;
+    } catch { }
   }
+  if (synth && !TTS.unlocked) {
+    try {
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0; u.rate = 1;
+      applyVoiceToUtterance(u, pickVoice());
+      synth.speak(u); synth.cancel();
+      TTS.unlocked = true;
+    } catch { }
+  }
+}
+function reportSpokenLine(text) {
+  const el = $("vSpoke");
+  if (el) el.textContent = text;
+}
+function reportSpokenVoice(v, fallbackNote) {
+  const d = describeVoice(v);
+  let line;
+  if (!v) line = "Last spoken with the browser default. No matching voice object was found. Language set to en-GB.";
+  else {
+    const where = d.localService === true ? "localService: yes (this device)" : d.localService === false ? "localService: no (network)" : "localService: unknown";
+    line = "Last spoken with " + d.name + " · " + (d.lang || "unknown language") + " · " + where + ".";
+  }
+  if (fallbackNote) line = fallbackNote + " " + line;
+  reportSpokenLine(line);
   const hint = $("vEngineHint");
   if (hint) {
     hint.hidden = !isAndroid;
     if (isAndroid) hint.textContent = "On Android, Chrome often lists several English names but plays only the one system voice from the phone's Text-to-speech settings. If every choice sounds the same, that is the device, not the picker.";
   }
 }
+function reportSpokenCloud(id) {
+  reportSpokenLine("Last spoken with " + cloudVoiceLabel(id) + ".");
+  const hint = $("vEngineHint");
+  if (hint) hint.hidden = true;
+}
 document.addEventListener("pointerdown", unlockSpeech, { capture: true, passive: true });
 document.addEventListener("touchend", unlockSpeech, { capture: true, passive: true });
 document.addEventListener("click", unlockSpeech, { capture: true });
 function chunks(t) { const out = []; String(t).replace(/\s+/g, " ").match(/[^.!?]+[.!?]*\s*/g)?.forEach(sn => { sn = sn.trim(); if (!sn) return; while (sn.length > 190) { let k = sn.lastIndexOf(",", 190); if (k < 60) k = sn.lastIndexOf(" ", 190); if (k < 1) k = 190; out.push(sn.slice(0, k + 1)); sn = sn.slice(k + 1).trim(); } if (sn) out.push(sn); }); return out.length ? out : [String(t)]; }
-function speak(text, onDone) {
-  const spoken = naturalize(text);
-  const done = () => { clearInterval(TTS.timer); clearTimeout(TTS.safety); clearInterval(TTS.resume); setMode(null); afterSpeak(); onDone && onDone(); };
-  if (!synth || !spoken) { done(); return; }
-  stopSpeaking(true); try { synth.resume(); } catch { } const g = ++TTS.gen, parts = chunks(spoken), v = pickVoice(), rate = +(LS.get("jcd.rate") || 1);
-  setMode("speaking");
-  reportSpokenVoice(v);
+function clearSpeakTimers() { clearInterval(TTS.timer); clearTimeout(TTS.safety); clearInterval(TTS.resume); }
+function stopCloudAudio() {
+  try { TTS.cloudAbort && TTS.cloudAbort.abort(); } catch { }
+  TTS.cloudAbort = null;
+  const a = TTS.audio;
+  if (a) {
+    try { a.onended = null; a.onerror = null; a.pause(); a.removeAttribute("src"); a.load(); } catch { }
+  }
+  if (TTS.cloudUrl) { try { URL.revokeObjectURL(TTS.cloudUrl); } catch { } TTS.cloudUrl = null; }
+  TTS.cloudStarted = false;
+}
+function speakDevice(spoken, g, rate, done, fallbackNote) {
+  if (!synth) { done(); return; }
+  try { synth.resume(); } catch { }
+  const parts = chunks(spoken), v = pickVoice();
+  reportSpokenVoice(v, fallbackNote);
   parts.forEach((p, idx) => { const u = new SpeechSynthesisUtterance(p); applyVoiceToUtterance(u, v); u.rate = rate; u.pitch = .95;
     u.onboundary = () => { TTS.lastB = performance.now(); deck && deck.setLevel(.75 + Math.random() * .25); };
     u.onend = () => { if (g === TTS.gen && idx === parts.length - 1) done(); };
     u.onerror = ev => { if (g === TTS.gen && idx === parts.length - 1 && ev.error !== "interrupted" && ev.error !== "canceled") done(); };
     synth.speak(u); });
-  // amplitude envelope: real word-boundary events where the browser fires them, a speech-like envelope otherwise
   TTS.timer = setInterval(() => { if (g !== TTS.gen) return; if (performance.now() - TTS.lastB > 260) deck && deck.setLevel(.3 + Math.random() * .45); }, 120);
-  // Chrome and some mobile browsers pause mid-utterance; keep speech running.
   TTS.resume = setInterval(() => { if (g !== TTS.gen) return; try { if (synth.speaking && synth.paused) synth.resume(); } catch { } }, 250);
-  TTS.safety = setTimeout(() => { if (g === TTS.gen && D.mode === "speaking") { synth.cancel(); done(); } }, 4000 + spoken.length * 110 / rate);
+  TTS.safety = setTimeout(() => { if (g === TTS.gen && D.mode === "speaking") { try { synth.cancel(); } catch { } done(); } }, 4000 + spoken.length * 110 / rate);
 }
-function stopSpeaking(silent) { TTS.gen++; clearInterval(TTS.timer); clearTimeout(TTS.safety); clearInterval(TTS.resume); try { synth && synth.cancel(); } catch { } if (!silent && D.mode === "speaking") setMode(null); }
+async function fetchCloudAudio(spoken, voiceId, rate, signal) {
+  const r = await fetch(XAI_TTS_URL, {
+    method: "POST",
+    signal,
+    headers: { Authorization: "Bearer " + xkey(), "Content-Type": "application/json" },
+    body: JSON.stringify(ttsRequestBody(spoken, voiceId, rate))
+  });
+  if (!r.ok) throw new Error("tts " + r.status);
+  const ct = (r.headers.get("content-type") || "").toLowerCase();
+  let buf, mime = "audio/mpeg";
+  if (ct.includes("application/json")) {
+    const j = await r.json();
+    if (!j || !j.audio) throw new Error("tts empty json");
+    const bin = atob(j.audio);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    buf = arr.buffer;
+    if (j.content_type) mime = String(j.content_type).split(";")[0].trim();
+  } else {
+    buf = await r.arrayBuffer();
+    if (ct.startsWith("audio/")) mime = ct.split(";")[0].trim();
+  }
+  if (!buf || !buf.byteLength) throw new Error("tts empty");
+  return { buf, mime };
+}
+async function speakCloud(spoken, voiceId, g, rate, done) {
+  const ctl = new AbortController();
+  TTS.cloudAbort = ctl;
+  const fetchTimer = setTimeout(() => { try { ctl.abort(); } catch { } }, 20000);
+  let audioData;
+  try { audioData = await fetchCloudAudio(spoken, voiceId, rate, ctl.signal); }
+  finally { clearTimeout(fetchTimer); }
+  if (g !== TTS.gen) return "cancelled";
+  const blob = new Blob([audioData.buf], { type: audioData.mime || "audio/mpeg" });
+  const url = URL.createObjectURL(blob);
+  if (TTS.cloudUrl) { try { URL.revokeObjectURL(TTS.cloudUrl); } catch { } }
+  TTS.cloudUrl = url;
+  if (!TTS.audio) TTS.audio = new Audio();
+  const audio = TTS.audio;
+  audio.onended = null; audio.onerror = null;
+  audio.src = url;
+  const started = () => {
+    TTS.cloudStarted = true;
+    reportSpokenCloud(voiceId);
+    TTS.timer = setInterval(() => { if (g !== TTS.gen) return; deck && deck.setLevel(.3 + Math.random() * .45); TTS.lastB = performance.now(); }, 120);
+    TTS.safety = setTimeout(() => { if (g === TTS.gen && D.mode === "speaking") { stopCloudAudio(); done(); } }, 8000 + spoken.length * 80 / (rate || 1));
+  };
+  audio.onended = () => { if (TTS.cloudUrl === url) { try { URL.revokeObjectURL(url); } catch { } TTS.cloudUrl = null; } if (g === TTS.gen) done(); };
+  audio.onerror = () => { if (TTS.cloudUrl === url) { try { URL.revokeObjectURL(url); } catch { } TTS.cloudUrl = null; } if (g === TTS.gen && TTS.cloudStarted) done(); };
+  try {
+    const playP = audio.play();
+    if (playP && playP.then) await playP;
+    if (g !== TTS.gen) return "cancelled";
+    started();
+    return "ok";
+  } catch (e) {
+    if (TTS.cloudUrl === url) { try { URL.revokeObjectURL(url); } catch { } TTS.cloudUrl = null; }
+    throw e;
+  }
+}
+function speak(text, onDone) {
+  const spoken = naturalize(text);
+  const done = () => { clearSpeakTimers(); setMode(null); afterSpeak(); onDone && onDone(); };
+  if (!spoken) { done(); return; }
+  stopSpeaking(true);
+  const g = ++TTS.gen, rate = +(LS.get("jcd.rate") || 1);
+  const cloud = chosenCloudVoice(LS.get("jcd.voice") || "", !!xkey());
+  setMode("speaking");
+  if (cloud) {
+    reportSpokenCloud(cloud);
+    speakCloud(spoken, cloud, g, rate, done).then(status => {
+      if (status === "cancelled" || g !== TTS.gen) return;
+    }).catch(() => {
+      if (g !== TTS.gen) return;
+      speakDevice(spoken, g, rate, done, "The cloud voice wasn't available, so this used the device voice.");
+    });
+    return;
+  }
+  if (!synth) { done(); return; }
+  speakDevice(spoken, g, rate, done);
+}
+function stopSpeaking(silent) {
+  TTS.gen++;
+  clearSpeakTimers();
+  stopCloudAudio();
+  try { synth && synth.cancel(); } catch { }
+  if (!silent && D.mode === "speaking") setMode(null);
+}
 function afterSpeak() { if (D.talk && SRc && pref("relisten", true)) setTimeout(() => { if (D.talk && !rec && !D.mode) listen(); }, 380); }
 function watchVoices() {
   if (!synth) return;
@@ -891,21 +1005,26 @@ function settingsVoice() {
   const sel = $("vSel"), vs = voices(), cur = LS.get("jcd.voice") || "";
   const { gb, other } = partitionVoices(vs);
   const auto = pickVoice();
-  const autoLabel = auto ? "Automatic, most natural British voice (" + esc(auto.name) + ")" : "Automatic, most natural British voice";
-  sel.innerHTML = `<option value="">${autoLabel}</option>` +
+  const autoLabel = auto ? "This device, most natural British voice (" + esc(auto.name) + ")" : "This device, most natural British voice";
+  const hasKey = !!xkey();
+  const cloudGroup = hasKey ? `<optgroup label="Natural (cloud)"><option value="cloud:eve">xAI Eve (British, natural cloud voice)</option><option value="cloud:leo">xAI Leo (British, natural cloud voice)</option></optgroup>` : "";
+  const autoVal = hasKey ? DEVICE_AUTO : "";
+  sel.innerHTML = cloudGroup + `<option value="${autoVal}">${autoLabel}</option>` +
     (gb.length ? `<optgroup label="British English">${gb.map(v => `<option value="${esc(v.voiceURI)}">${esc(v.name)}</option>`).join("")}</optgroup>` : "") +
     (other.length ? `<optgroup label="Other English">${other.map(v => `<option value="${esc(v.voiceURI)}">${esc(v.name)} (${esc(v.lang)})</option>`).join("")}</optgroup>` : "") +
-    (!vs.length ? `<option disabled>${synth ? "Voices are still loading…" : "Speech output isn't supported in this browser"}</option>` : "");
-  sel.value = cur;
-  if (cur && sel.value !== cur) sel.value = "";
+    (!vs.length && !hasKey ? `<option disabled>${synth ? "Voices are still loading…" : "Speech output isn't supported in this browser"}</option>` : "");
+  const shown = hasKey && !cur ? "cloud:eve" : (hasKey && parseCloudVoice(cur) ? ("cloud:" + parseCloudVoice(cur)) : cur);
+  sel.value = shown;
+  if (shown && sel.value !== shown) sel.value = autoVal;
   const rt = LS.get("jcd.rate") || "1"; $("vRate").value = rt; $("vRateV").textContent = naturalize((+rt).toFixed(2)) + " times";
   $("relistenChk").checked = pref("relisten", true); $("speakTypedChk").checked = pref("speakTyped", true); $("histChk").checked = pref("hist", true);
   const hint = $("vHint");
   if (hint) {
-    if (!synth) hint.textContent = "Speech output isn't supported in this browser.";
-    else if (!vs.length) hint.textContent = "Voices are still loading on this device. Keep this panel open, or tap Test voice in a moment.";
-    else if (!gb.length) hint.textContent = "No British English voice was found on this device yet. Other English voices are listed below, and the picker will update if a British voice appears.";
-    else hint.textContent = "British English voices are listed first, with the more natural ones at the top. Automatic uses the most natural British voice this device offers. Your choice is saved on this device.";
+    if (hasKey) hint.textContent = "Natural (cloud) voices use your xAI key. Eve is used automatically when a key is saved, unless you pick Leo or a device voice. If the cloud request fails, the deck falls back to this device. Your choice is saved on this device.";
+    else if (!synth) hint.textContent = "Speech output isn't supported in this browser.";
+    else if (!vs.length) hint.textContent = "Voices are still loading on this device. Keep this panel open, or tap Test voice in a moment. Add an xAI key below to use Natural (cloud) British voices (Eve and Leo).";
+    else if (!gb.length) hint.textContent = "No British English voice was found on this device yet. Add an xAI key below to use Natural (cloud) British voices (Eve and Leo).";
+    else hint.textContent = "British English voices are listed first, with the more natural ones at the top. Add an xAI key below to use Natural (cloud) British voices (Eve and Leo). Your choice is saved on this device.";
   }
   const engine = $("vEngineHint");
   if (engine) {
@@ -933,7 +1052,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=2612");
+      const { Deck } = await import("./scene.js?v=2613");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;

@@ -1,5 +1,5 @@
 // node tests/voices.test.mjs  — checks British voice ranking and auto-pick
-import { isBritish, isEnglish, voiceScore, partitionVoices, pickBestVoice, findSavedVoice, utteranceLangFor, applyVoiceToUtterance, describeVoice } from "../voices.js";
+import { isBritish, isEnglish, voiceScore, partitionVoices, pickBestVoice, findSavedVoice, utteranceLangFor, applyVoiceToUtterance, describeVoice, parseCloudVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, DEVICE_AUTO } from "../voices.js";
 
 let fail = 0, pass = 0;
 const eq = (got, want, label) => { if (got === want) pass++; else { fail++; console.log("FAIL", label || "", "\n  got:  " + got + "\n  want: " + want); } };
@@ -65,6 +65,26 @@ eq(findSavedVoice([sonia, daniel], "Daniel").name, "Daniel", "findSavedVoice by 
 eq(findSavedVoice([sonia, daniel], "missing"), null, "findSavedVoice misses cleanly");
 eq(describeVoice(sonia).name, sonia.name, "describeVoice name");
 eq(describeVoice(null).lang, "en-GB", "describeVoice empty lang fallback");
+
+eq(parseCloudVoice("cloud:eve"), "eve", "parse eve");
+eq(parseCloudVoice("cloud:Leo"), "leo", "parse leo case-insensitive");
+eq(parseCloudVoice("Daniel"), null, "device name is not cloud");
+eq(chosenCloudVoice("", true), "eve", "default to Eve when key present and nothing saved");
+eq(chosenCloudVoice("cloud:leo", true), "leo", "honour saved Leo");
+eq(chosenCloudVoice("cloud:eve", false), null, "no cloud without a key");
+eq(chosenCloudVoice(DEVICE_AUTO, true), null, "explicit device auto skips cloud");
+eq(chosenCloudVoice("android-daniel", true), null, "saved device voice skips cloud");
+eq(cloudVoiceLabel("eve"), "xAI Eve (cloud)", "Eve label");
+eq(cloudVoiceLabel("leo"), "xAI Leo (cloud)", "Leo label");
+const body = ttsRequestBody("Hello there.", "leo", 1.1);
+eq(body.language, "en", "tts language is en");
+eq(body.voice_id, "leo", "tts voice_id");
+eq(body.text, "Hello there.", "tts text is pre-naturalized input");
+eq(body.speed, 1.1, "tts speed passed when not 1");
+ok(!("speed" in ttsRequestBody("Hi", "eve", 1)), "omit speed at 1");
+eq(deviceVoiceSaved("cloud:eve"), "", "cloud saved is not a device URI");
+eq(deviceVoiceSaved(DEVICE_AUTO), "", "device auto is not a URI");
+eq(deviceVoiceSaved("android-daniel"), "android-daniel", "device URI preserved");
 
 console.log(pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
