@@ -7,8 +7,8 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { makeAvatar, animateAvatar } from "./avatars.js?v=2613";
-import { compactStatus } from "./readout.js?v=2613";
+import { makeAvatar, animateAvatar } from "./avatars.js?v=2614";
+import { compactStatus } from "./readout.js?v=2614";
 
 const NOISE = /* glsl */`
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
@@ -490,9 +490,10 @@ export class Deck {
   }
   fire(i, dir = "out") {
     if (i == null || i < 1 || i > this.nodes.length) return;
-    const n = this.nodes[i - 1], color = dir === "out" ? n.bot.color : "#b2d4d9";
+    const n = this.nodes[i - 1], color = dir === "out" ? n.bot.color : "#b4a6ff";
     const m = this.makeBeamMeshes(color); this.beams.push({ i, dir, t0: performance.now(), m, done: false, hit: false });
     if (dir === "out") this.flareCore(.6);
+    else { n.flare = 1.0; if (n.world) this.shock(n.world.clone().add(new THREE.Vector3(0, -.9, 0)), color, 3.6); }
   }
   setLinks(list) { // persistent routed-but-unanswered links: [{i}]
     const want = new Set(list.map(x => x.i).filter(i => i >= 1));

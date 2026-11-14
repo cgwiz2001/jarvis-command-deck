@@ -1,8 +1,9 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=2613";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2613";
-import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2613";
-import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2613";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION } from "./config.js?v=2614";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2614";
+import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2614";
+import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2614";
+import { inboxFlowEvents, statusFlowEvents, botStatusSig, seenSnapshot } from "./flow.js?v=2614";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -105,6 +106,7 @@ function displayOf(i) {
 const S = { inbox: [], bots: [], botByIdx: {}, at: 0, err: null, polling: false, selected: null, firstPoll: true, freshIds: new Set(), suspended: false };
 let deck = null;
 let seen = {}; try { seen = JSON.parse(LS.get("jcd.seen") || "{}") || {}; } catch {}
+let seenBots = {}; try { seenBots = JSON.parse(LS.get("jcd.seenBots") || "{}") || {}; } catch {}
 
 // ---------- toasts ----------
 function toast(html, ms = 4200) { const t = document.createElement("div"); t.className = "toast glass"; t.innerHTML = html; $("toasts").appendChild(t);
@@ -172,22 +174,47 @@ function ingest() {
     deck.setStates(states);
     if (deck.setIdentities) deck.setIdentities(idents);
   }
-  // beams from status transitions since last seen on this device
-  const first = !Object.keys(seen).length, fresh = new Set();
+  // beams from real events since last seen on this device: outbound when Jarvis
+  // sends a task, inbound when a bot replies or updates its status.
+  const firstInbox = !Object.keys(seen).length, firstBots = !Object.keys(seenBots).length, fresh = new Set();
   for (const r of S.inbox) {
-    if (!r || !r.id) continue; const prev = seen[r.id], cur = r.status, bi = botIndex(r.routedTo);
-    if (!first && prev !== cur) {
-      fresh.add(r.id);
-      if (cur === "routed" && bi > 0) { deck && deck.fire(bi, "out"); toast(`Jarvis has sent a request on to <b>${esc(displayOf(bi).name)}</b>.`); }
-      if (cur === "answered") { if (bi > 0) { if (prev !== "routed") deck && deck.fire(bi, "out"); setTimeout(() => deck && deck.fire(bi, "in"), prev !== "routed" ? 2400 : 0); }
-        else deck && deck.flareCore(1);
+    if (!r || !r.id) continue;
+    const prev = seen[r.id], bi = botIndex(r.routedTo);
+    if (!firstInbox) {
+      const evs = inboxFlowEvents(prev, r, bi);
+      if (evs.length) fresh.add(r.id);
+      for (const ev of evs) {
+        const go = ev.dir === "out" ? () => deck && deck.fire(bi, "out")
+          : ev.dir === "in" ? () => deck && deck.fire(bi, "in")
+          : () => deck && deck.flareCore(1);
+        if (ev.delay) setTimeout(go, ev.delay); else go();
+        if (ev.reason === "routed") toast(`Jarvis has sent a request on to <b>${esc(displayOf(bi).name)}</b>.`);
+      }
+      if (evs.some(ev => ev.reason === "answered" || ev.reason === "reply" || ev.reason === "answered-core")) {
         const raw = String(r.reply || ""), snippet = naturalizeText(raw.slice(0, 120));
-        toast(`<b>${esc(bi >= 0 ? displayOf(bi).name : "Jarvis")}</b> answered: ${esc(snippet)}${raw.length > 120 ? "…" : ""}`, 6500); }
-      if (cur === "new" && prev === undefined && !S.justSent?.has(r.id)) deck && deck.intake();
+        toast(`<b>${esc(bi >= 0 ? displayOf(bi).name : "Jarvis")}</b> answered: ${esc(snippet)}${raw.length > 120 ? "…" : ""}`, 6500);
+      }
+      const prevStatus = typeof prev === "string" ? prev : (prev && prev.status);
+      if ((r.status === "new") && prevStatus == null && !S.justSent?.has(r.id)) deck && deck.intake();
     }
-    seen[r.id] = cur;
+    seen[r.id] = seenSnapshot(r);
   }
-  S.freshIds = fresh; LS.set("jcd.seen", JSON.stringify(seen));
+  let statusIn = 0;
+  for (const b of S.bots) {
+    const i = botIndex(b.name, b.role);
+    if (i < 1) continue;
+    const key = String(i), sig = botStatusSig(b), prev = seenBots[key];
+    if (!firstBots) {
+      for (const ev of statusFlowEvents(prev, sig, i)) {
+        const delay = (ev.delay || 0) + statusIn * 180;
+        const go = () => deck && deck.fire(i, ev.dir);
+        if (delay) setTimeout(go, delay); else go();
+        statusIn++;
+      }
+    }
+    seenBots[key] = sig;
+  }
+  S.freshIds = fresh; LS.set("jcd.seen", JSON.stringify(seen)); LS.set("jcd.seenBots", JSON.stringify(seenBots));
   if (deck) deck.setLinks(S.inbox.filter(r => r.status === "routed").map(r => ({ i: botIndex(r.routedTo) })).filter(x => x.i > 0));
 }
 
@@ -721,7 +748,7 @@ async function converse(text, spoken) {
     if (speakIt) speak(reply); else setMode(null);
   } finally { convBusy = false; $("sendBtn").disabled = false; D.thinking = false; }
 }
-function markSent(item) { S.justSent.add(item.id); seen[item.id] = "new"; LS.set("jcd.seen", JSON.stringify(seen)); }
+function markSent(item) { S.justSent.add(item.id); seen[item.id] = seenSnapshot(item); LS.set("jcd.seen", JSON.stringify(seen)); }
 
 // ----- History note logging (same entry format as the HUD) -----
 const hEsc = x => String(x || "").replace(/\s+/g, " ").trim().replace(/[\\`*_#<>\[\]|~]/g, "\\$&").replace(/^([-+=]|\d+\.)/, "\\$1");
@@ -1052,7 +1079,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=2613");
+      const { Deck } = await import("./scene.js?v=2614");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
