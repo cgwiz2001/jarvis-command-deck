@@ -7,8 +7,9 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { makeAvatar, animateAvatar } from "./avatars.js?v=2615";
-import { compactStatus } from "./readout.js?v=2615";
+import { makeAvatar, animateAvatar } from "./avatars.js?v=2616";
+import { compactStatus } from "./readout.js?v=2616";
+import { resolveLabels, smoothLabels } from "./labels.js?v=2616";
 
 const NOISE = /* glsl */`
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
@@ -592,7 +593,7 @@ export class Deck {
       labItems.push({ el: n.label, v: tmp.clone(), op: ap });
     });
     labItems.push({ el: this.coreLabel, v: new THREE.Vector3(0, 2.55, 0), op: Math.min(1, t / 1.2) });
-    this.layoutLabels(labItems);
+    this.layoutLabels(labItems, ds);
     // hover raycast (desktop)
     if (this.ptrActive) this.setHover(this.pick());
     // transient beams
@@ -625,9 +626,9 @@ export class Deck {
     el._lh = Math.max(1, el.offsetHeight);
     el._mkey = key;
   }
-  layoutLabels(items) {
+  layoutLabels(items, ds) {
     const w = this.w, h = this.h, cam = this.camera;
-    const mt = (w <= 820 ? 70 : 18), mb = (w <= 820 ? 136 : 96), mx = 8, gap = 6;
+    const mt = (w <= 820 ? 70 : 60), mb = (w <= 820 ? 136 : 96), mx = 8, gap = 6;
     let leftPad = mx, rightPad = mx;
     if (w > 820) {
       const L = document.getElementById("left"), R = document.getElementById("right");
@@ -645,34 +646,24 @@ export class Deck {
       const lw = el._lw * s, lh = el._lh * s;
       boxes.push({ el, vis: true, ax, ay, lx: ax - lw / 2, ly: ay - lh, lw, lh, s, dist, op: it.op });
     }
-    const clampBox = b => { b.lx = Math.max(leftPad, Math.min(w - rightPad - b.lw, b.lx)); b.ly = Math.max(mt, Math.min(h - mb - b.lh, b.ly)); };
+    // v2.6.16 label collision avoidance: place every visible label so none overlap,
+    // keeping each one as close to its bot as possible, then ease towards that spot.
     const visB = boxes.filter(b => b.vis);
-    visB.forEach(clampBox);
-    for (let iter = 0; iter < 4; iter++) {
-      for (let i = 0; i < visB.length; i++) {
-        for (let j = i + 1; j < visB.length; j++) {
-          const a = visB[i], o = visB[j];
-          if (!(a.lx < o.lx + o.lw + gap && a.lx + a.lw + gap > o.lx && a.ly < o.ly + o.lh + gap && a.ly + a.lh + gap > o.ly)) continue;
-          const aCore = a.el.classList.contains("core"), oCore = o.el.classList.contains("core");
-          let move = a, stay = o;
-          if (aCore && !oCore) { move = o; stay = a; }
-          else if (!aCore && oCore) { move = a; stay = o; }
-          else if (a.ay > o.ay) { move = a; stay = o; }
-          if (move.ay <= stay.ay) move.ly = stay.ly - move.lh - gap;
-          else move.ly = stay.ly + stay.lh + gap;
-          clampBox(move);
-        }
-      }
-      for (const a of visB) {
-        for (const o of visB) {
-          if (a === o) continue;
-          if (o.ax >= a.lx - 4 && o.ax <= a.lx + a.lw + 4 && o.ay >= a.ly - 4 && o.ay <= a.ly + a.lh + 4) {
-            a.ly = Math.min(a.ly, o.ay - a.lh - gap - 4);
-            clampBox(a);
-          }
-        }
-      }
-    }
+    const bounds = { left: leftPad, top: mt, right: w - rightPad, bottom: h - mb };
+    if (bounds.right - bounds.left < 120) { bounds.left = mx; bounds.right = w - mx; }
+    const want = visB.map((b, i) => {
+      const el = b.el, core = el.classList.contains("core");
+      const pri = (core ? 1000 : 0) + (el.classList.contains("sel") ? 500 : 0) + (el.classList.contains("hov") ? 250 : 0) + (100 - b.dist);
+      const hasPrev = Number.isFinite(el._ox) && el._ovis;
+      return { id: i, x: b.lx, y: b.ly, w: b.lw, h: b.lh, ax: b.ax, ay: b.ay, priority: pri,
+        prevX: hasPrev ? b.ax + el._ox : undefined, prevY: hasPrev ? b.ay + el._oy : undefined };
+    });
+    const targets = resolveLabels(want, bounds, { gap });
+    const cur = visB.map(b => (Number.isFinite(b.el._ox) && b.el._ovis) ? { x: b.ax + b.el._ox, y: b.ay + b.el._oy, w: b.lw, h: b.lh } : null);
+    const shown = smoothLabels(cur, targets, Math.min(1, 1 - Math.exp(-(ds || .016) * 9)), 2, bounds);
+    visB.forEach((b, i) => { b.lx = shown[i].x; b.ly = shown[i].y; b.el._ox = b.lx - b.ax; b.el._oy = b.ly - b.ay; b.el._ovis = true; });
+    for (const b of boxes) if (!b.vis) b.el._ovis = false;
+    this.lastLabelRects = visB.map(b => ({ name: b.el.querySelector(".n")?.textContent || "", x: b.lx, y: b.ly, w: b.lw, h: b.lh }));
     for (const b of boxes) {
       const el = b.el, lead = el.querySelector(":scope > .nl-lead");
       if (!b.vis) {

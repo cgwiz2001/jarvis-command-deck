@@ -1,10 +1,10 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION, USAGE_NOTE_ID } from "./config.js?v=2615";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2615";
-import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2615";
-import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2615";
-import { inboxFlowEvents, statusFlowEvents, botStatusSig, seenSnapshot } from "./flow.js?v=2615";
-import { parseUsage, usageTone, usagePercentLabel, usageRingOffset, usageHeadline, usageDetailText, isUsageStale } from "./usage.js?v=2615";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION, USAGE_NOTE_ID } from "./config.js?v=2616";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2616";
+import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2616";
+import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2616";
+import { inboxFlowEvents, statusFlowEvents, botStatusSig, seenSnapshot } from "./flow.js?v=2616";
+import { parseUsage, usageTone, usagePercentLabel, usageRingOffset, usageHeadline, usageDetailText, isUsageStale } from "./usage.js?v=2616";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -1142,7 +1142,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=2615");
+      const { Deck } = await import("./scene.js?v=2616");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
