@@ -364,3 +364,11 @@ body.locked>*:not(#lock){visibility:hidden!important}
   .logo-lock .logo-word{height:40px}
 }
 @media (prefers-reduced-motion:reduce){.lock-dots.sh{animation:none}}
+
+/* v2.6.17: silence countdown ring on the mic while Jarvis keeps listening through a pause */
+.mic{position:relative}
+.mic::after{content:"";position:absolute;inset:-4px;border-radius:50%;pointer-events:none;opacity:0;transition:opacity .2s;
+  background:conic-gradient(#ffd166 calc(var(--sil,0) * 360deg),rgba(255,255,255,.12) 0);
+  -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px));mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px))}
+.mic.rec.pausing::after{opacity:1}
+.mic.rec.pausing{animation:none}

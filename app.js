@@ -1,13 +1,15 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION, USAGE_NOTE_ID } from "./config.js?v=2616";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2616";
-import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2616";
-import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2616";
-import { inboxFlowEvents, statusFlowEvents, botStatusSig, seenSnapshot } from "./flow.js?v=2616";
-import { parseUsage, usageTone, usagePercentLabel, usageRingOffset, usageHeadline, usageDetailText, isUsageStale } from "./usage.js?v=2616";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION, USAGE_NOTE_ID } from "./config.js?v=2617";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2617";
+import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2617";
+import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2617";
+import { inboxFlowEvents, statusFlowEvents, botStatusSig, seenSnapshot } from "./flow.js?v=2617";
+import { PAUSE_OPTIONS, pauseMs, pauseValue, Transcript, silenceState, onEndDecision, listeningNote } from "./listen.js?v=2617";
+import { parseUsage, usageTone, usagePercentLabel, usageRingOffset, usageHeadline, usageDetailText, isUsageStale } from "./usage.js?v=2617";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+let L = null;  // the current listening turn (v2.6.17), which may span several recogniser sessions
 const LS = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }, del: k => { try { localStorage.removeItem(k); } catch {} } };
 function clearStaleHookKeys() { LS.del("jcd.hookUrl"); LS.del("jcd.hookKey"); }
 clearStaleHookKeys();
@@ -579,6 +581,7 @@ function renderCaption() {
 // ----- mood (core reacts) -----
 function renderNote() {
   const n = $("cmdNote");
+  if (D.mode === "listening" && L) { showListenNote(null); return; }
   const lbl = { listening: "Listening…", thinking: "Jarvis is thinking…", speaking: "Jarvis is speaking. Tap the mic to interrupt." }[D.mode];
   const key = lbl ? ("mood:" + lbl + ":" + D.talk) : ("idle:" + !!xkey());
   if (n._lastKey === key) return;
@@ -988,6 +991,7 @@ function speak(text, onDone) {
   const done = () => { clearSpeakTimers(); setMode(null); afterSpeak(); onDone && onDone(); };
   if (!spoken) { done(); return; }
   stopSpeaking(true);
+  if (L) stopListening(true);  // never speak into an open mic
   const g = ++TTS.gen, rate = +(LS.get("jcd.rate") || 1);
   const cloud = chosenCloudVoice(LS.get("jcd.voice") || "", !!xkey());
   setMode("speaking");
@@ -1011,7 +1015,7 @@ function stopSpeaking(silent) {
   try { synth && synth.cancel(); } catch { }
   if (!silent && D.mode === "speaking") setMode(null);
 }
-function afterSpeak() { if (D.talk && SRc && pref("relisten", true)) setTimeout(() => { if (D.talk && !rec && !D.mode) listen(); }, 380); }
+function afterSpeak() { if (D.talk && SRc && pref("relisten", true)) setTimeout(() => { if (D.talk && !rec && !L && !D.mode) listen(); }, 500); }
 function watchVoices() {
   if (!synth) return;
   let tries = 0;
@@ -1029,7 +1033,7 @@ let rec = null, meter = null;
 async function startMeter() {
   if (isAndroid || !navigator.mediaDevices || !window.AudioContext) return; // Android: avoid fighting the recogniser for the mic
   try { const st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    if (!rec) { st.getTracks().forEach(t => t.stop()); return; }
+    if (!L || meter) { st.getTracks().forEach(t => t.stop()); return; }
     const ac = new AudioContext(), an = ac.createAnalyser(); an.fftSize = 512; ac.createMediaStreamSource(st).connect(an); const buf = new Uint8Array(an.fftSize);
     meter = { st, ac, raf: 0 }; const tick = () => { an.getByteTimeDomainData(buf); let s = 0; for (const x of buf) { const d = (x - 128) / 128; s += d * d; } deck && deck.setLevel(Math.min(1, Math.sqrt(s / buf.length) * 5.5)); meter.raf = requestAnimationFrame(tick); }; tick();
   } catch { }
@@ -1049,24 +1053,86 @@ async function ensureMic() {
     return false;
   }
 }
-async function listen() {
-  if (!SRc || rec || convBusy || micAsking) return;
-  if (!micOk) { micAsking = true; const ok = await ensureMic(); micAsking = false; if (!ok) { if (D.talk) { setTalk(false); addMsg("sys", "Talk mode stopped: the microphone isn't available."); } return; } if (rec || convBusy) return; }
-  stopSpeaking(true);
-  const r = rec = new SRc(); r.lang = "en-GB"; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
-  let fin = "", err = ""; D.interim = "";
-  r.onstart = () => { setMode("listening"); $("micBtn").classList.add("rec"); startMeter(); };
-  r.onsoundstart = () => deck && deck.setLevel(.4);
-  r.onresult = ev => { let f = "", it = ""; for (let i = 0; i < ev.results.length; i++) { const x = ev.results[i]; if (x.isFinal) f += x[0].transcript; else it += x[0].transcript; } fin = f; D.interim = (f + " " + it).trim(); if (!meter) deck && deck.setLevel(.55 + Math.random() * .35); renderDialog(); };
-  r.onerror = ev => { err = ev.error; if (!["aborted", "no-speech"].includes(ev.error)) toast(ev.error === "not-allowed" ? (micOk = false, "The microphone is blocked for the Command Deck. Open the app menu, choose Site settings, set Microphone to Allow, then reopen the app.") : "The microphone had a problem: " + esc(naturalizeText(ev.error))); };
-  r.onend = () => { const txt = (fin || D.interim).trim(); rec = null; $("micBtn").classList.remove("rec"); stopMeter(); D.interim = ""; setMode(null); renderDialog();
-    if (txt) { D.quietMisses = 0; converse(txt, true); return; }
-    if (D.talk && err === "no-speech" && ++D.quietMisses < 3) { setTimeout(() => D.talk && !rec && !D.mode && listen(), 300); return; }
-    if (D.talk && (err === "no-speech" || err === "not-allowed" || err === "audio-capture")) { setTalk(false); addMsg("sys", err === "no-speech" ? "Talk mode paused: I didn't hear anything." : "Talk mode stopped: the microphone isn't available."); }
-  };
-  try { r.start(); } catch (e) { rec = null; toast("The microphone isn't available: " + esc(naturalizeText(e.message))); }
+// v2.6.17: continuous listening. Pauses don't end the turn; it is sent after the chosen silence gap
+// (Settings, default 2.5 seconds) or when the mic is tapped again. Android's own early stops are restarted.
+// L (the current listening turn) is declared near the top of the file, which may span several recogniser sessions
+const pauseSetting = () => pauseMs(LS.get("jcd.pause"));
+function micRing(frac) { const m = $("micBtn"); if (m) m.style.setProperty("--sil", String(Math.max(0, Math.min(1, frac || 0)))); }
+function showListenNote(remaining) {
+  const n = $("cmdNote"); if (!n || !L) return;
+  const txt = listeningNote({ pause: L.pause, remaining, talk: D.talk });
+  if (n._lastKey === "listen:" + txt) return;
+  n._lastKey = "listen:" + txt; n.classList.add("mood"); n.textContent = txt;
 }
-function stopListening(abort) { if (!rec) return; try { abort ? rec.abort() : rec.stop(); } catch { } }
+function tickSilence() {
+  if (!L || L.finishing) return;
+  const st = silenceState({ now: Date.now(), lastSpeechAt: L.lastAt, pause: L.pause, hasText: L.tr.hasText() });
+  const mic = $("micBtn"); if (mic) mic.classList.toggle("pausing", st.remaining != null);
+  micRing(st.remaining != null ? st.fraction : 0);
+  showListenNote(st.remaining);
+  if (st.action === "send") finishListening();
+}
+function endTurn() {
+  const l = L; if (!l) return; L = null;
+  clearInterval(l.timer); clearTimeout(l.restartT); clearTimeout(l.stopT);
+  rec = null; const mic = $("micBtn"); mic.classList.remove("rec", "pausing"); micRing(0); stopMeter();
+  D.interim = ""; $("cmdNote")._lastKey = ""; setMode(null); renderDialog();
+}
+function sendTurn(l) {
+  const txt = l.tr.text().trim(); endTurn();
+  if (txt) { D.quietMisses = 0; converse(txt, true); }
+}
+function finishListening() {
+  const l = L; if (!l) return; l.finishing = true;
+  if (l.rec) { try { l.rec.stop(); } catch { sendTurn(l); return; } clearTimeout(l.stopT); l.stopT = setTimeout(() => { if (L === l) sendTurn(l); }, 1500); }
+  else sendTurn(l);  // between sessions: send what we have
+}
+function startSession(l) {
+  if (L !== l || l.cancelled) return;
+  const r = l.rec = rec = new SRc(); r.lang = "en-GB"; r.interimResults = true; r.continuous = true; r.maxAlternatives = 1;
+  let err = "", gotResult = false;
+  r.onstart = () => { if (L !== l) return; setMode("listening"); $("micBtn").classList.add("rec"); showListenNote(null); if (!meter) startMeter(); };
+  r.onsoundstart = () => deck && deck.setLevel(.4);
+  r.onspeechstart = () => { if (L === l && l.lastAt) l.lastAt = Date.now(); };
+  r.onresult = ev => {
+    if (L !== l || l.rec !== r) return;
+    if (D.mode === "speaking") stopSpeaking(true);
+    gotResult = true;
+    if (l.tr.update(ev.results)) l.lastAt = Date.now();
+    D.interim = l.tr.text();
+    if (!meter) deck && deck.setLevel(.55 + Math.random() * .35);
+    renderDialog(); tickSilence();
+  };
+  r.onerror = ev => { err = ev.error; if (!["aborted", "no-speech"].includes(ev.error)) toast(ev.error === "not-allowed" ? (micOk = false, "The microphone is blocked for the Command Deck. Open the app menu, choose Site settings, set Microphone to Allow, then reopen the app.") : "The microphone had a problem: " + esc(naturalizeText(ev.error))); };
+  r.onend = () => {
+    if (L !== l || l.rec !== r) return;
+    l.rec = null; rec = null; l.tr.endSession();
+    l.idle = gotResult ? 0 : l.idle + 1;
+    const d = onEndDecision({ finishing: l.finishing, cancelled: l.cancelled, error: err, hasText: l.tr.hasText(), idleRestarts: l.idle });
+    if (d === "restart") { l.restartT = setTimeout(() => startSession(l), 120); return; }
+    if (d === "send") { sendTurn(l); return; }
+    endTurn();
+    if (d === "discard") return;
+    if (D.talk && err === "no-speech" && ++D.quietMisses < 3) { setTimeout(() => D.talk && !rec && !L && !D.mode && listen(), 300); return; }
+    if (D.talk && (err === "no-speech" || err === "not-allowed" || err === "audio-capture" || err === "service-not-allowed")) { setTalk(false); addMsg("sys", err === "no-speech" ? "Talk mode paused: I didn't hear anything." : "Talk mode stopped: the microphone isn't available."); }
+  };
+  try { r.start(); } catch (e) { l.rec = null; rec = null; endTurn(); toast("The microphone isn't available: " + esc(naturalizeText(e.message))); }
+}
+async function listen() {
+  if (!SRc || rec || L || convBusy || micAsking) return;
+  if (!micOk) { micAsking = true; const ok = await ensureMic(); micAsking = false; if (!ok) { if (D.talk) { setTalk(false); addMsg("sys", "Talk mode stopped: the microphone isn't available."); } return; } if (rec || L || convBusy) return; }
+  stopSpeaking(true);  // Jarvis's voice (device or cloud) never plays while the mic is open
+  D.interim = "";
+  const l = L = { tr: new Transcript(), pause: pauseSetting(), lastAt: 0, idle: 0, finishing: false, cancelled: false, rec: null };
+  l.timer = setInterval(tickSilence, 100);
+  startSession(l);
+}
+function stopListening(abort) {
+  const l = L; if (!l) return;
+  if (!abort) { finishListening(); return; }
+  l.cancelled = true; const r = l.rec; endTurn();
+  if (r) { try { r.abort(); } catch { } }
+}
 function setTalk(on) {
   D.talk = !!on; D.quietMisses = 0; const b = $("talkBtn"); b.classList.toggle("on", D.talk); b.setAttribute("aria-pressed", String(D.talk));
   if (D.talk) { if (mobileQ.matches) closeLeft(); toast("Talk mode on. Speak naturally; tap the mic to interrupt Jarvis.", 3000); if (!D.mode) listen(); }
@@ -1080,7 +1146,7 @@ function setTalk(on) {
   mic.addEventListener("pointerdown", e => { t0 = Date.now(); long = false; clearTimeout(lp); lp = setTimeout(() => { long = true; if (navigator.vibrate) navigator.vibrate(18); setTalk(!D.talk); }, 550); });
   const up = () => { clearTimeout(lp); if (long || !t0) { t0 = 0; return; } t0 = 0;
     if (D.mode === "speaking") { stopSpeaking(); listen(); return; }            // barge-in
-    if (rec) { stopListening(false); return; }
+    if (L) { finishListening(); return; }                                     // tap again: send now
     listen(); };
   mic.addEventListener("pointerup", up); mic.addEventListener("pointercancel", () => { clearTimeout(lp); t0 = 0; });
   mic.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); t0 = Date.now(); up(); } });
@@ -1107,6 +1173,7 @@ function settingsVoice() {
   sel.value = shown;
   if (shown && sel.value !== shown) sel.value = autoVal;
   const rt = LS.get("jcd.rate") || "1"; $("vRate").value = rt; $("vRateV").textContent = naturalize((+rt).toFixed(2)) + " times";
+  const ps = $("pauseSel"); if (ps) { ps.innerHTML = PAUSE_OPTIONS.map(o => `<option value="${o.value}">${esc(o.label)}</option>`).join(""); ps.value = pauseValue(LS.get("jcd.pause")); }
   $("relistenChk").checked = pref("relisten", true); $("speakTypedChk").checked = pref("speakTyped", true); $("histChk").checked = pref("hist", true);
   const hint = $("vHint");
   if (hint) {
@@ -1128,6 +1195,7 @@ $("xModel").onchange = e => { const v = e.target.value.trim(); if (v) LS.set("jc
 $("vSel").onchange = e => { if (e.target.value) LS.set("jcd.voice", e.target.value); else LS.del("jcd.voice"); };
 $("vRate").oninput = e => { LS.set("jcd.rate", e.target.value); $("vRateV").textContent = naturalize((+e.target.value).toFixed(2)) + " times"; };
 $("vTest").onclick = e => { e.preventDefault(); unlockSpeech(); speak("This is the Command Deck, speaking in this voice."); };
+$("pauseSel").onchange = e => LS.set("jcd.pause", pauseValue(e.target.value));
 $("relistenChk").onchange = e => LS.set("jcd.relisten", e.target.checked ? "1" : "0");
 $("speakTypedChk").onchange = e => LS.set("jcd.speakTyped", e.target.checked ? "1" : "0");
 $("histChk").onchange = e => LS.set("jcd.hist", e.target.checked ? "1" : "0");
@@ -1142,7 +1210,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=2616");
+      const { Deck } = await import("./scene.js?v=2617");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
