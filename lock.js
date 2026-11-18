@@ -1,5 +1,5 @@
 // Jarvis Command Deck — PIN lock. Only a salted PBKDF2 hash is stored locally. No PIN lives in source.
-import { numberToWords, unitCount } from "./readout.js?v=2618";
+import { numberToWords, unitCount } from "./readout.js?v=2619";
 const ITER = 150000;
 const PREFIX = "jcd.lock.";
 const IDLE_OPTS = [0, 1, 5, 15, 30];
@@ -194,7 +194,7 @@ async function accept() {
   unlockWaiters.splice(0).forEach(fn => fn());
   if (!started) {
     started = true;
-    app = await import("./app.js?v=2618");
+    app = await import("./app.js?v=2619");
     await app.boot();
   } else if (app && app.resumeDeck) {
     app.resumeDeck();
