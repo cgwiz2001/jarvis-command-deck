@@ -372,3 +372,8 @@ body.locked>*:not(#lock){visibility:hidden!important}
   -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px));mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px))}
 .mic.rec.pausing::after{opacity:1}
 .mic.rec.pausing{animation:none}
+
+/* v2.6.18: a failed send stays visible with a retry */
+.bub.sys.fail{padding:0;background:none;border:0}
+.bub.sys .retry{width:100%;text-align:left;font:inherit;color:#ffd1d8;background:rgba(255,77,106,.14);border:1px solid rgba(255,77,106,.45);border-radius:12px;padding:10px 12px;cursor:pointer}
+.bub.sys .retry:disabled{opacity:.6;cursor:default}

@@ -1,11 +1,12 @@
 // Jarvis Command Deck — data link + UI. No secrets live in this file.
-import { ROSTER, POLL_MS, WRITE_AGENT, VERSION, USAGE_NOTE_ID } from "./config.js?v=2617";
-import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2617";
-import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2617";
-import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2617";
-import { inboxFlowEvents, statusFlowEvents, botStatusSig, seenSnapshot } from "./flow.js?v=2617";
-import { PAUSE_OPTIONS, pauseMs, pauseValue, Transcript, silenceState, onEndDecision, listeningNote } from "./listen.js?v=2617";
-import { parseUsage, usageTone, usagePercentLabel, usageRingOffset, usageHeadline, usageDetailText, isUsageStale } from "./usage.js?v=2617";
+import { ROSTER, POLL_MS, WRITE_AGENT, VERSION, USAGE_NOTE_ID } from "./config.js?v=2618";
+import { lockNow, changePin, getIdleMinutes, setIdleMinutes, resetDeck, hasPin, bumpActivity } from "./lock.js?v=2618";
+import { naturalize, naturalizeText, numberToWords, unitCount, versionToWords, formatClock, formatDate, formatWhen, ago, crewStatePhrase, narrationHtml, dossierLineHtml, requestNarration, messageTimingHtml } from "./readout.js?v=2618";
+import { partitionVoices, pickBestVoice, applyVoiceToUtterance, describeVoice, chosenCloudVoice, cloudVoiceLabel, ttsRequestBody, deviceVoiceSaved, parseCloudVoice, DEVICE_AUTO, XAI_TTS_URL } from "./voices.js?v=2618";
+import { inboxFlowEvents, statusFlowEvents, botStatusSig, seenSnapshot } from "./flow.js?v=2618";
+import { PAUSE_OPTIONS, pauseMs, pauseValue, Transcript, silenceState, onEndDecision, listeningNote } from "./listen.js?v=2618";
+import { isBroadcastRequest, isAllRouteName, broadcastItems, claimsUnsentAsk, NOT_SENT_LINE, broadcastLine, failureText } from "./route.js?v=2618";
+import { parseUsage, usageTone, usagePercentLabel, usageRingOffset, usageHeadline, usageDetailText, isUsageStale } from "./usage.js?v=2618";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -37,6 +38,7 @@ function instantLine(name, confirmed) {
 }
 function routeChip(m) {
   const r = m.route; if (!r) return "";
+  if (r.all) return `<div class="rt"><div class="rt-row">${r.ok ? broadcastLine(r.n || ROSTER.length - 1, r.confirmed === false ? false : true) : "I wasn't able to queue that for the crew."}</div></div>`;
   const who = r.i > 0 ? chip(r.i) : "";
   let line = "I wasn't able to queue that just now.";
   if (r.ok && r.i > 0) line = r.confirmed
@@ -59,18 +61,23 @@ async function sbGet(id) {
 function sbJson(md) { const m = /```json\s*([\s\S]*?)```/.exec(md || ""); return JSON.parse(m ? m[1] : md); }
 function sbMd(md, obj) { const j = "```json\n" + JSON.stringify(obj, null, 2) + "\n```"; return /```json[\s\S]*?```/.test(md) ? md.replace(/```json[\s\S]*?```/, () => j) : md + "\n\n" + j + "\n"; }
 async function sbAppend(text, routedTo = null) {
+  const items = await sbAppendItems(() => [{ id: "r" + Date.now().toString(36), createdAt: new Date().toISOString(), text, status: "new", routedTo, reply: null, repliedAt: null }]);
+  return items[0];
+}
+// Appends one or more Inbox items in a single PATCH. Re-reads the note (fresh ETag) and retries on 409/412.
+async function sbAppendItems(make) {
   if (S.suspended) throw new Error("locked");
   const t = token(), c = conn(); if (!t) throw new Error("no token");
   for (let i = 0; i < 4; i++) {
     const { n, etag } = await sbGet(c.inbox); if (!etag) throw new Error("no ETag from Second Brain"); const o = sbJson(n.markdown); o.requests = Array.isArray(o.requests) ? o.requests : [];
-    const item = { id: "r" + Date.now().toString(36), createdAt: new Date().toISOString(), text, status: "new", routedTo, reply: null, repliedAt: null };
-    o.requests.push(item);
+    const item = make();
+    o.requests.push(...item);
     const r = await fetch(noteUrl(c.inbox), { method: "PATCH", headers: { Authorization: "Bearer " + t, "Content-Type": "application/json", "If-Match": etag, "X-Second-Brain-Agent": WRITE_AGENT },
       body: JSON.stringify({ title: n.title, summary: n.summary || "", markdown: sbMd(n.markdown, o) }) });
     if (r.status === 409 || r.status === 412) { await new Promise(z => setTimeout(z, 350 + i * 400)); continue; }
     if (!r.ok) throw new Error("HTTP " + r.status); return item;
   }
-  throw new Error("inbox busy, try again");
+  throw new Error("the Inbox was busy");
 }
 
 // ---------- roster matching ----------
@@ -473,6 +480,7 @@ function setTab(t) { document.querySelectorAll(".tab").forEach(b => b.classList.
 document.addEventListener("click", e => {
   const s = e.target.closest("[data-sel]"); if (s) { select(+s.dataset.sel); return; }
   const o = e.target.closest("[data-open]"); if (o) openSettings();
+  const rt = e.target.closest("[data-retry]"); if (rt) { e.preventDefault(); retryFailed(rt.getAttribute("data-retry")); }
 });
 document.querySelectorAll(".tab").forEach(b => b.onclick = () => setTab(b.dataset.tab));
 const toggleLeft = tab => { const L = $("left"); if (L.classList.contains("open") && !$("tab-" + tab).hidden) closeLeft(); else openLeft(tab); };
@@ -547,7 +555,9 @@ function addMsg(who, text, extra) { const raw = String(text || ""); const m = Ob
 
 // ----- dialogue rendering -----
 function bubble(m) {
-  if (m.who === "sys") return `<div class="bub sys">${esc(m.text)}</div>`;
+  if (m.who === "sys") return m.retry
+    ? `<div class="bub sys fail"><button type="button" class="retry" data-retry="${esc(m.id)}"${m.retry.busy ? " disabled" : ""}>${esc(m.retry.busy ? "Retrying…" : m.text)}</button></div>`
+    : `<div class="bub sys">${esc(m.text)}</div>`;
   const me = m.who === "me", rt = routeChip(m);
   return `<div class="bub ${me ? "me" : "jv"}"><span class="who">${me ? "Commander" : "Jarvis"}</span>${esc(m.text)}${rt}</div>`;
 }
@@ -643,7 +653,7 @@ async function systemPrompt() {
 Reply in one to three short spoken sentences of plain, natural English, with contractions. Weave any facts, crew statuses, times, and amounts into those sentences; never read back lists, bullets, pipes, labels, or bare metrics.
 Write every number, currency amount, and quantity in natural spoken words — for example "one hundred and fifty pounds twenty-two", "twelve minutes ago", "three bots", "twelve point five percent". Never use raw digits, and never read a number digit by digit.
 No markdown, lists, symbols, emoji or URLs.
-You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, set route to a non-null object with that bot's exact crew name and a short task brief; the deck then adds it to your Second Brain inbox addressed to that bot. If the user asks you to advise, ask, tell, brief, inform, or otherwise pass work to a named crew member, you MUST set route to that bot; never use route null for those requests. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a job is done or started. Never say "route sent", "passed on", "queued", "I've passed", "I'll pass", "sent to", "routed" or similar yourself — the deck appends the real outcome line after it actually queues the job. In the spoken reply, just say briefly what that bot will be asked to do, without claiming it has already been sent. Do not say when the bot will pick it up. Never claim a crew member confirmed, received, replied to, started, or finished a job unless the inbox snapshot below shows that request as answered. If it is not shown as answered, say you do not have a confirmation yet. Never invent times or outcomes.
+You cannot act on accounts or message bots directly from here. When a request is a job for one specialist on the crew below, set route to a non-null object with that bot's exact crew name and a short task brief; the deck then adds it to your Second Brain inbox addressed to that bot. If the user asks you to advise, ask, tell, brief, inform, or otherwise pass work to a named crew member, you MUST set route to that bot; never use route null for those requests. If the user asks for something from every bot, all the bots or the whole crew (for example fresh status updates), set route to {"bot": "all", "task": "<one-line brief for every bot>"}; the deck then queues one Inbox item for each crew member. Answer chat, quick questions and anything you can handle yourself with route null. Never claim a job is done or started. Never say "route sent", "passed on", "queued", "I've passed", "I'll pass", "sent to", "routed" or similar yourself — the deck appends the real outcome line after it actually queues the job. In the spoken reply, just say briefly what that bot will be asked to do, without claiming it has already been sent. Do not say when the bot will pick it up. Never claim a crew member confirmed, received, replied to, started, or finished a job unless the inbox snapshot below shows that request as answered. If it is not shown as answered, say you do not have a confirmation yet. Never invent times or outcomes.
 Here is the crew, as natural sentences (the snapshot may be a little out of date):
 ${crewBrief()}
 Inbox snapshot:
@@ -675,6 +685,7 @@ function routeFrom(o) {
   if (!o || o.route === null) return null;
   const name = routeName(o.route) || routeName({ bot: o.bot, routedTo: o.routedTo, to: o.to });
   const task = (o.route && typeof o.route === "object" && (o.route.task || o.route.text)) || o.task || "";
+  if (isAllRouteName(name)) return { all: true, i: -2, task: String(task || "").trim() };
   const i = botIndex(name); return i > 0 ? { i, task: String(task || "").trim() } : null;
 }
 function claimingHandoff(text) {
@@ -759,7 +770,10 @@ function parseReply(raw, userText) {
   if (js) { try { const o = JSON.parse(js); reply = String(o.reply || "").trim(); route = routeFrom(o); } catch { } }
   if (!reply) reply = t.replace(/[{}"]/g, "").trim();
   if (!route) route = inferHandoff(reply, userText) || inferHandoff(t, userText) || inferUserHandoff(userText);
-  if (route && !userHasTask(userText)) route = null;
+  if (route && !route.all && !userHasTask(userText)) route = null;
+  // v2.6.18: "ask every bot ..." goes to the whole crew, one Inbox item each.
+  if (isBroadcastRequest(userText)) route = { all: true, i: -2, task: (route && route.task) || String(userText || "").replace(/\s+/g, " ").trim() };
+  else if (route && route.all && !userHasTask(userText)) route = null;
   return { reply, route };
 }
 async function askJarvis(text) {
@@ -781,7 +795,7 @@ let convBusy = false;
 async function converse(text, spoken) {
   text = String(text || "").trim(); if (!text || convBusy || S.suspended) return;
   if (keyish(text)) { toast("That looks like a key or token, so I haven't sent it anywhere."); return; }
-  convBusy = true; $("sendBtn").disabled = true; addMsg("me", text);
+  convBusy = true; $("sendBtn").disabled = true; addMsg("me", text); D.failQ = [];
   const speakIt = spoken || pref("speakTyped", true);
   try {
     if (!xkey()) { // fallback: queue in the inbox; Second Brain routes it
@@ -791,28 +805,79 @@ async function converse(text, spoken) {
           const confirmed = await confirmQueued(item.id);
           route = { i: -1, ok: true, id: item.id, confirmed };
           reply = "No instant replies without an xAI key, so I've added that to my inbox. " + instantLine(null, confirmed); }
-        catch (e) { reply = "I couldn't add that to my inbox just now (" + e.message + ")."; } }
+        catch (e) { reply = "I couldn't add that to my inbox just now (" + e.message + ")."; failNote("queue", "", { task: text, to: null }); } }
       addMsg("jv", reply, route ? { route } : null); if (speakIt) speak(reply); else setMode(null); return;
     }
     D.thinking = true; setMode("thinking"); renderDialog();
     let res; try { res = await askJarvis(text); }
     catch (e) { D.thinking = false; renderDialog(); const msg = e.name === "AbortError" ? "timed out" : e.message;
-      addMsg("sys", "Jarvis couldn't reply (" + msg + ")."); if (speakIt) speak("Sorry, I couldn't reach my reply service just then."); else setMode(null); return; }
+      addMsg("sys", "Jarvis couldn't reply (" + msg + ")."); failNote("ask", "", { text }); if (speakIt) speak("Sorry, I couldn't reach my reply service just then."); else setMode(null); return; }
     D.thinking = false;
     let reply = res.reply || "Understood.", route = null;
-    if (res.route) {
+    if (res.route && res.route.all) {
+      const out = await queueCrew(res.route.task || text);
+      route = out.route;
+      reply = [withoutHandoffClaim(reply), out.line].filter(Boolean).join(" ");
+    } else if (res.route) {
       const i = res.route.i, name = displayOf(i).name; deck && deck.fire(i, "out"); route = { i, ok: false };
       if (!token()) reply = [withoutHandoffClaim(reply), "Second Brain isn't linked on this device, so " + name + " hasn't got it yet."].filter(Boolean).join(" ");
       else try { const item = await sbAppend(res.route.task || text, name); markSent(item); route.ok = true; route.id = item.id;
           route.confirmed = await confirmQueued(item.id);
           reply = [withoutHandoffClaim(reply), instantLine(name, route.confirmed)].filter(Boolean).join(" "); }
-        catch (e) { reply = [withoutHandoffClaim(reply), "I couldn't add it to my inbox just now, so " + name + " hasn't got it yet."].filter(Boolean).join(" "); }
-    } else reply = withoutHandoffClaim(reply);
+        catch (e) { reply = [withoutHandoffClaim(reply), "I couldn't add it to my inbox just now (" + e.message + "), so " + name + " hasn't got it yet."].filter(Boolean).join(" "); failNote("queue", name, { task: res.route.task || text, to: name }); }
+    } else { reply = withoutHandoffClaim(reply); if (claimsUnsentAsk(reply)) reply += " " + NOT_SENT_LINE; }
     D.hist.push({ role: "user", content: text }, { role: "assistant", content: reply }); D.hist = D.hist.slice(-12);
     addMsg("jv", reply, route ? { route } : null);
     logHistory(text, reply);
     if (speakIt) speak(reply); else setMode(null);
-  } finally { convBusy = false; $("sendBtn").disabled = false; D.thinking = false; }
+  } finally { convBusy = false; $("sendBtn").disabled = false; D.thinking = false; const q = D.failQ || []; D.failQ = null; q.forEach(a => failNote(...a)); }
+}
+// v2.6.18: queue a job for every crew member (one Inbox item each, one write).
+async function queueCrew(task) {
+  const names = ROSTER.slice(1).map((b, k) => displayOf(k + 1).name || b.name);
+  const route = { all: true, i: -2, ok: false, n: names.length };
+  if (!token()) return { route, line: "Second Brain isn't linked on this device, so the crew hasn't got it yet." };
+  try {
+    const items = await sbAppendItems(() => broadcastItems(task, names, Date.now()));
+    items.forEach(markSent); route.ok = true; route.id = items[0].id; route.ids = items.map(x => x.id);
+    for (let k = 1; k < ROSTER.length; k++) deck && deck.fire(k, "out");
+    route.confirmed = await confirmQueued(items[items.length - 1].id);
+    return { route, line: broadcastLine(names.length, route.confirmed) };
+  } catch (e) {
+    failNote("queue", "all", { task, to: "all" });
+    return { route, line: "I couldn't add it to the Inbox just now (" + e.message + "), so the crew hasn't got it yet." };
+  }
+}
+// A visible failure with the text kept and a retry button.
+function failNote(kind, name, data) {
+  if (Array.isArray(D.failQ)) { D.failQ.push([kind, name, data]); return; }  // shown after Jarvis's reply
+  addMsg("sys", failureText(kind, name), { retry: Object.assign({ kind }, data) });
+  const inp = $("cmdIn"), keep = kind === "ask" ? data.text : data.task;
+  if (inp && !inp.value.trim() && keep) inp.value = keep;
+  toast(esc(failureText(kind, name)), 6000);
+}
+async function retryFailed(id) {
+  const m = D.log.find(x => x.id === id); if (!m || !m.retry || convBusy) return;
+  const r = m.retry;
+  if (r.kind === "ask") { delete m.retry; saveLog(); renderDialog(); const inp = $("cmdIn"); if (inp && inp.value.trim() === r.text) inp.value = ""; converse(r.text, false); return; }
+  m.retry = Object.assign({}, r, { busy: true }); renderDialog();
+  try {
+    if (r.to === "all") {
+      const out = await queueCrew(r.task);
+      if (!out.route.ok) { delete m.retry; saveLog(); renderDialog(); return; }  // queueCrew already posted a new failure
+      addMsg("jv", out.line, { route: out.route });
+    } else {
+      const item = await sbAppend(r.task, r.to || null); markSent(item);
+      const i = r.to ? botIndex(r.to) : -1; if (i > 0) deck && deck.fire(i, "out"); else deck && deck.intake();
+      const confirmed = await confirmQueued(item.id);
+      addMsg("jv", instantLine(r.to || null, confirmed), { route: { i, ok: true, id: item.id, confirmed } });
+    }
+    delete m.retry; m.text = "Sent after a retry."; saveLog(); renderDialog();
+    const inp = $("cmdIn"); if (inp && inp.value.trim() === r.task) inp.value = "";
+  } catch (e) {
+    m.retry = Object.assign({}, r); delete m.retry.busy; saveLog(); renderDialog();
+    toast(esc(failureText("queue", r.to === "all" ? "all" : r.to)) + " (" + esc(naturalizeText(e.message)) + ")", 6000);
+  }
 }
 function markSent(item) { S.justSent.add(item.id); seen[item.id] = seenSnapshot(item); LS.set("jcd.seen", JSON.stringify(seen)); }
 
@@ -1210,7 +1275,7 @@ export async function boot() {
   if (gl) {
     try {
       line.textContent = "Spinning up the core…";
-      const { Deck } = await import("./scene.js?v=2617");
+      const { Deck } = await import("./scene.js?v=2618");
       const reduced = LS.get("jcd.reduced") === "1" || matchMedia("(prefers-reduced-motion:reduce)").matches;
       deck = new Deck($("gl"), $("labels"), ROSTER, { quality: qs.get("quality") || LS.get("jcd.quality") || "auto", reduced, onSelect: i => select(i) });
       window.__deck = deck;
